@@ -7,6 +7,7 @@ S3_PREFIX="${S3_PREFIX:-recordings/pipeline}"
 PIPELINE_ENABLED="${PIPELINE_ENABLED:-true}"
 SKIP_SAM_BUILD="${SKIP_SAM_BUILD:-false}"
 PLAN_ONLY="${PLAN_ONLY:-false}"
+ALLOW_STACK_RECREATE="${ALLOW_STACK_RECREATE:-false}"
 
 : "${CODE_BUCKET:?CODE_BUCKET is required}"
 : "${RECORDINGS_TRANSFORM_SHARED_SECRET:?RECORDINGS_TRANSFORM_SHARED_SECRET is required}"
@@ -14,6 +15,11 @@ PLAN_ONLY="${PLAN_ONLY:-false}"
 
 if [[ "${PLAN_ONLY}" != "true" && "${PLAN_ONLY}" != "false" ]]; then
   echo "PLAN_ONLY must be 'true' or 'false'." >&2
+  exit 2
+fi
+
+if [[ "${ALLOW_STACK_RECREATE}" != "true" && "${ALLOW_STACK_RECREATE}" != "false" ]]; then
+  echo "ALLOW_STACK_RECREATE must be 'true' or 'false'." >&2
   exit 2
 fi
 
@@ -39,7 +45,12 @@ case "${stack_status}" in
       exit 1
     fi
 
-    echo "Removing unrecoverable stack ${STACK_NAME} (${stack_status}) before redeploying."
+    if [[ "${ALLOW_STACK_RECREATE}" != "true" ]]; then
+      echo "Refusing to delete and recreate ${STACK_NAME} while it is in ${stack_status}. Re-run only after investigation with ALLOW_STACK_RECREATE=true if recreation is intentional." >&2
+      exit 1
+    fi
+
+    echo "Explicit recovery enabled: removing unrecoverable stack ${STACK_NAME} (${stack_status}) before redeploying."
     aws cloudformation delete-stack \
       --stack-name "${STACK_NAME}" \
       --region "${AWS_REGION}"
