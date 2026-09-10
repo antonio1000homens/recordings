@@ -1,0 +1,17 @@
+{
+  "name": "recordings-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@aws-sdk/client-lambda": "^3.883.0",
+    "@aws-sdk/client-s3": "^3.883.0",
+    "@aws-sdk/s3-request-presigner": "^3.883.0",
+    "ffmpeg-static": "5.3.0"
+  },
+  "scripts": {
+    "check": "node --check src/upload.mjs && node --check src/media.mjs && node --check src/ai.mjs && node --check src/media-core.mjs",
+    "test": "node --test"
+  }
+}

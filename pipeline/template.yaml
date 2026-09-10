@@ -1,0 +1,476 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Event-driven phone recording ingestion, chunking and Gemini orchestration.
+
+Parameters:
+  SharedSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 24
+  GeminiApiKey:
+    Type: String
+    NoEcho: true
+    MinLength: 10
+  PipelineEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  TransformFunctionName:
+    Type: String
+    Default: recordings-transform
+
+Conditions:
+  PipelineIsEnabled: !Equals [!Ref PipelineEnabled, 'true']
+
+Resources:
+  RecordingsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub recordings-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteTemporaryChunks
+            Status: Enabled
+            Prefix: processing/
+            ExpirationInDays: 1
+
+  UploadLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/recordings-upload
+      RetentionInDays: 14
+
+  MediaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/recordings-media
+      RetentionInDays: 14
+
+  AiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/recordings-ai
+      RetentionInDays: 14
+
+  UploadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: recordings-upload-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: recordings-upload-runtime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-upload:*
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${RecordingsBucket.Arn}/inbox/*
+
+  MediaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: recordings-media-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: recordings-media-runtime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-media:*
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub ${RecordingsBucket.Arn}/inbox/*
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${RecordingsBucket.Arn}/processing/*
+
+  AiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: recordings-ai-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: recordings-ai-runtime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-ai:*
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub ${RecordingsBucket.Arn}/inbox/*
+                  - !Sub ${RecordingsBucket.Arn}/processing/*
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TransformFunctionName}
+
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: UploadLogGroup
+    Properties:
+      FunctionName: recordings-upload
+      Runtime: nodejs22.x
+      Architectures: [x86_64]
+      Handler: src/upload.handler
+      CodeUri: .
+      Role: !GetAtt UploadRole.Arn
+      MemorySize: 128
+      Timeout: 15
+      Environment:
+        Variables:
+          RECORDINGS_BUCKET: !Ref RecordingsBucket
+          RECORDINGS_SHARED_SECRET: !Ref SharedSecret
+      FunctionUrlConfig:
+        AuthType: NONE
+        InvokeMode: BUFFERED
+
+  UploadUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UploadFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  UploadInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UploadFunction
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
+  MediaFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MediaLogGroup
+    Properties:
+      FunctionName: recordings-media
+      Runtime: nodejs22.x
+      Architectures: [x86_64]
+      Handler: src/media.handler
+      CodeUri: .
+      Role: !GetAtt MediaRole.Arn
+      MemorySize: 2048
+      Timeout: 300
+      EphemeralStorage:
+        Size: 1024
+
+  AiFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: AiLogGroup
+    Properties:
+      FunctionName: recordings-ai
+      Runtime: nodejs22.x
+      Architectures: [x86_64]
+      Handler: src/ai.handler
+      CodeUri: .
+      Role: !GetAtt AiRole.Arn
+      MemorySize: 1024
+      Timeout: 600
+      Environment:
+        Variables:
+          GEMINI_API_KEY: !Ref GeminiApiKey
+          GEMINI_TEXT_MODEL: gemini-3.5-flash-lite
+          TRANSFORM_FUNCTION_NAME: !Ref TransformFunctionName
+
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: recordings-pipeline-state-machine-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: states.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: recordings-pipeline-state-machine
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt MediaFunction.Arn
+                  - !GetAtt AiFunction.Arn
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TransformFunctionName}
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${RecordingsBucket.Arn}/results/*
+
+  RecordingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: recordings-pipeline
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StateMachineRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Transcribe a phone recording with quota-safe Gemini chunking",
+          "StartAt": "ProbeAndChunk",
+          "States": {
+            "ProbeAndChunk": {
+              "Type": "Task",
+              "Resource": "${MediaFunction.Arn}",
+              "Parameters": {
+                "bucket.$": "$.detail.bucket.name",
+                "key.$": "$.detail.object.key"
+              },
+              "Retry": [{
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }],
+              "Next": "DirectOrChunked"
+            },
+            "DirectOrChunked": {
+              "Type": "Choice",
+              "Choices": [{
+                "Variable": "$.route",
+                "StringEquals": "direct",
+                "Next": "TranscribeDirect"
+              }],
+              "Default": "TranscribeChunks"
+            },
+            "TranscribeDirect": {
+              "Type": "Task",
+              "Resource": "${AiFunction.Arn}",
+              "Parameters": {
+                "action": "transcribe_direct",
+                "item.$": "$.chunks[0]"
+              },
+              "ResultPath": "$.enrichment",
+              "Retry": [
+                {"ErrorEquals": ["GeminiRateLimitError"], "IntervalSeconds": 65, "MaxAttempts": 3, "BackoffRate": 1},
+                {"ErrorEquals": ["GeminiTransientError", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"], "IntervalSeconds": 10, "MaxAttempts": 3, "BackoffRate": 2}
+              ],
+              "Next": "SummariseDirect"
+            },
+            "SummariseDirect": {
+              "Type": "Task",
+              "Resource": "${AiFunction.Arn}",
+              "Parameters": {
+                "action": "generate",
+                "request.$": "$.enrichment.gemini_request"
+              },
+              "ResultPath": "$.summary_response",
+              "Retry": [
+                {"ErrorEquals": ["GeminiRateLimitError"], "IntervalSeconds": 65, "MaxAttempts": 3, "BackoffRate": 1},
+                {"ErrorEquals": ["GeminiTransientError"], "IntervalSeconds": 10, "MaxAttempts": 3, "BackoffRate": 2}
+              ],
+              "Next": "FinalizeDirect"
+            },
+            "FinalizeDirect": {
+              "Type": "Task",
+              "Resource": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TransformFunctionName}",
+              "Parameters": {
+                "action": "finalize",
+                "input": {
+                  "transcript_html.$": "$.enrichment.transcript_html",
+                  "gemini_response.$": "$.summary_response"
+                }
+              },
+              "ResultPath": "$.final",
+              "Next": "SaveDirectResult"
+            },
+            "SaveDirectResult": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
+              "Parameters": {
+                "Bucket": "${RecordingsBucket}",
+                "Key.$": "States.Format('results/{}.html', $.recording_id)",
+                "Body.$": "$.final.formatted_html",
+                "ContentType": "text/html; charset=utf-8"
+              },
+              "ResultPath": "$.saved",
+              "End": true
+            },
+            "TranscribeChunks": {
+              "Type": "Map",
+              "ItemsPath": "$.chunks",
+              "MaxConcurrency": 1,
+              "ResultPath": "$.chunk_transcripts",
+              "Iterator": {
+                "StartAt": "TranscribeChunk",
+                "States": {
+                  "TranscribeChunk": {
+                    "Type": "Task",
+                    "Resource": "${AiFunction.Arn}",
+                    "Parameters": {
+                      "action": "transcribe_chunk",
+                      "item.$": "$"
+                    },
+                    "Retry": [
+                      {"ErrorEquals": ["GeminiRateLimitError"], "IntervalSeconds": 65, "MaxAttempts": 3, "BackoffRate": 1},
+                      {"ErrorEquals": ["GeminiTransientError", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"], "IntervalSeconds": 10, "MaxAttempts": 3, "BackoffRate": 2}
+                    ],
+                    "Next": "ThrottleTranscribe"
+                  },
+                  "ThrottleTranscribe": {
+                    "Type": "Wait",
+                    "Seconds": 65,
+                    "End": true
+                  }
+                }
+              },
+              "Next": "BuildStitchRequest"
+            },
+            "BuildStitchRequest": {
+              "Type": "Task",
+              "Resource": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TransformFunctionName}",
+              "Parameters": {
+                "action": "stitch-request-from-blocks",
+                "input": { "blocks.$": "$.chunk_transcripts" }
+              },
+              "ResultPath": "$.stitch_request",
+              "Next": "StitchChunks"
+            },
+            "StitchChunks": {
+              "Type": "Task",
+              "Resource": "${AiFunction.Arn}",
+              "Parameters": {
+                "action": "generate",
+                "request.$": "$.stitch_request.gemini_request"
+              },
+              "ResultPath": "$.stitched_response",
+              "Retry": [
+                {"ErrorEquals": ["GeminiRateLimitError"], "IntervalSeconds": 65, "MaxAttempts": 3, "BackoffRate": 1},
+                {"ErrorEquals": ["GeminiTransientError"], "IntervalSeconds": 10, "MaxAttempts": 3, "BackoffRate": 2}
+              ],
+              "Next": "PrepareStitchedEnrichment"
+            },
+            "PrepareStitchedEnrichment": {
+              "Type": "Task",
+              "Resource": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TransformFunctionName}",
+              "Parameters": {
+                "action": "prepare-stitched-enrichment",
+                "input": { "gemini_response.$": "$.stitched_response" }
+              },
+              "ResultPath": "$.enrichment",
+              "Next": "SummariseStitched"
+            },
+            "SummariseStitched": {
+              "Type": "Task",
+              "Resource": "${AiFunction.Arn}",
+              "Parameters": {
+                "action": "generate",
+                "request.$": "$.enrichment.gemini_request"
+              },
+              "ResultPath": "$.summary_response",
+              "Retry": [
+                {"ErrorEquals": ["GeminiRateLimitError"], "IntervalSeconds": 65, "MaxAttempts": 3, "BackoffRate": 1},
+                {"ErrorEquals": ["GeminiTransientError"], "IntervalSeconds": 10, "MaxAttempts": 3, "BackoffRate": 2}
+              ],
+              "Next": "FinalizeStitched"
+            },
+            "FinalizeStitched": {
+              "Type": "Task",
+              "Resource": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TransformFunctionName}",
+              "Parameters": {
+                "action": "finalize",
+                "input": {
+                  "transcript_html.$": "$.enrichment.transcript_html",
+                  "gemini_response.$": "$.summary_response"
+                }
+              },
+              "ResultPath": "$.final",
+              "Next": "SaveStitchedResult"
+            },
+            "SaveStitchedResult": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
+              "Parameters": {
+                "Bucket": "${RecordingsBucket}",
+                "Key.$": "States.Format('results/{}.html', $.recording_id)",
+                "Body.$": "$.final.formatted_html",
+                "ContentType": "text/html; charset=utf-8"
+              },
+              "ResultPath": "$.saved",
+              "End": true
+            }
+          }
+        }
+
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: recordings-pipeline-eventbridge-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-recordings-pipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref RecordingStateMachine
+
+  RecordingCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: recordings-uploaded
+      State: !If [PipelineIsEnabled, ENABLED, DISABLED]
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        detail:
+          bucket:
+            name: [!Ref RecordingsBucket]
+          object:
+            key:
+              - prefix: inbox/
+      Targets:
+        - Arn: !Ref RecordingStateMachine
+          Id: recordings-pipeline
+          RoleArn: !GetAtt EventBridgeRole.Arn
+
+Outputs:
+  UploadFunctionUrl:
+    Description: Tasker calls POST /upload-url here before PUTting the recording to S3.
+    Value: !GetAtt UploadFunctionUrl.FunctionUrl
+  RecordingsBucketName:
+    Value: !Ref RecordingsBucket
+  StateMachineArn:
+    Value: !Ref RecordingStateMachine
+  PipelineEnabled:
+    Value: !Ref PipelineEnabled
