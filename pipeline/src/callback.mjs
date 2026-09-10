@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 let ddbClient;
 let ddbCommands;
 let sfnClient;
@@ -18,12 +20,12 @@ function parseBody(event) {
   return JSON.parse(raw);
 }
 
-function callbackIdFromPath(path) {
+export function callbackIdFromPath(path) {
   const match = String(path || '').match(/^\/recordings\/callback\/([a-f0-9]{64})\/?$/i);
   return match?.[1]?.toLowerCase() || null;
 }
 
-function sanitizeCallbackOutput(body, recordingId) {
+export function sanitizeCallbackOutput(body, recordingId) {
   const output = {
     recordingId,
     status: body.status,
@@ -166,12 +168,99 @@ function itemNumber(item, name) {
   return Number(item?.[name]?.N || 0);
 }
 
-function isTerminal(status) {
+export function isTerminal(status) {
   return ['SUCCEEDED', 'FAILED', 'DELIVERY_FAILED', 'EXPIRED'].includes(status);
 }
 
 function isExpiredTaskTokenError(error) {
   return ['TaskTimedOut', 'InvalidToken', 'TaskDoesNotExist'].includes(error?.name);
+}
+
+function productionDependencies() {
+  return {
+    fetchCallback,
+    claimCallback,
+    finalizeCallback,
+    rollbackClaim,
+    expireCallback,
+    releaseStepFunction,
+  };
+}
+
+export async function processCallback({ callbackId, body, completionId, nowEpoch }, dependencies = productionDependencies()) {
+  const item = await dependencies.fetchCallback(callbackId);
+  if (!item) return { statusCode: 404, payload: { error: 'unknown_callback' } };
+
+  const recordingId = itemString(item, 'recordingId');
+  if (body.recordingId && String(body.recordingId) !== recordingId) {
+    return { statusCode: 409, payload: { error: 'recording_mismatch' } };
+  }
+
+  const currentStatus = itemString(item, 'status');
+  if (isTerminal(currentStatus)) {
+    return {
+      statusCode: 200,
+      payload: { ok: true, duplicate: true, status: currentStatus.toLowerCase() },
+    };
+  }
+  if (currentStatus === 'COMPLETING') {
+    return { statusCode: 202, payload: { ok: true, duplicate: true, status: 'completing' } };
+  }
+
+  if (itemNumber(item, 'expiresAtEpoch') < nowEpoch) {
+    await dependencies.expireCallback(callbackId);
+    return { statusCode: 410, payload: { error: 'callback_expired' } };
+  }
+
+  let claimed;
+  try {
+    claimed = await dependencies.claimCallback(callbackId, completionId, nowEpoch);
+  } catch (error) {
+    if (error.name === 'ConditionalCheckFailedException') {
+      const latest = await dependencies.fetchCallback(callbackId);
+      const latestStatus = itemString(latest, 'status');
+      if (isTerminal(latestStatus)) {
+        return {
+          statusCode: 200,
+          payload: { ok: true, duplicate: true, status: latestStatus.toLowerCase() },
+        };
+      }
+      return { statusCode: 409, payload: { error: 'callback_not_available' } };
+    }
+    throw error;
+  }
+
+  const taskToken = itemString(claimed, 'taskToken');
+  if (!taskToken) {
+    await dependencies.finalizeCallback(callbackId, completionId, 'EXPIRED');
+    return { statusCode: 410, payload: { error: 'callback_expired' } };
+  }
+
+  const output = sanitizeCallbackOutput(body, recordingId);
+  try {
+    const terminalStatus = await dependencies.releaseStepFunction(taskToken, output);
+    await dependencies.finalizeCallback(callbackId, completionId, terminalStatus);
+    console.info('Recording callback completed', { callbackId, recordingId, status: terminalStatus });
+    return { statusCode: 200, payload: { ok: true, status: terminalStatus.toLowerCase() } };
+  } catch (error) {
+    if (isExpiredTaskTokenError(error)) {
+      await dependencies.finalizeCallback(callbackId, completionId, 'EXPIRED');
+      console.warn('Recording callback arrived after Step Functions task expired', { callbackId, recordingId });
+      return { statusCode: 410, payload: { error: 'callback_expired' } };
+    }
+
+    try {
+      await dependencies.rollbackClaim(callbackId, completionId);
+    } catch (rollbackError) {
+      console.error('Unable to release callback claim after Step Functions error', {
+        callbackId,
+        recordingId,
+        error: rollbackError.name,
+      });
+    }
+    console.error('Unable to resume Step Functions callback task', { callbackId, recordingId, error: error.name });
+    return { statusCode: 503, payload: { error: 'callback_retry_required' } };
+  }
 }
 
 export async function handler(event, context = {}) {
@@ -193,77 +282,11 @@ export async function handler(event, context = {}) {
     return json(400, { error: 'invalid_status' });
   }
 
-  const item = await fetchCallback(callbackId);
-  if (!item) return json(404, { error: 'unknown_callback' });
-
-  const recordingId = itemString(item, 'recordingId');
-  if (body.recordingId && String(body.recordingId) !== recordingId) {
-    return json(409, { error: 'recording_mismatch' });
-  }
-
-  const currentStatus = itemString(item, 'status');
-  if (isTerminal(currentStatus)) {
-    return json(200, { ok: true, duplicate: true, status: currentStatus.toLowerCase() });
-  }
-  if (currentStatus === 'COMPLETING') {
-    return json(202, { ok: true, duplicate: true, status: 'completing' });
-  }
-
-  const nowEpoch = Math.floor(Date.now() / 1000);
-  if (itemNumber(item, 'expiresAtEpoch') < nowEpoch) {
-    await expireCallback(callbackId);
-    return json(410, { error: 'callback_expired' });
-  }
-
-  const completionId = String(context.awsRequestId || cryptoRandomFallback());
-  let claimed;
-  try {
-    claimed = await claimCallback(callbackId, completionId, nowEpoch);
-  } catch (error) {
-    if (error.name === 'ConditionalCheckFailedException') {
-      const latest = await fetchCallback(callbackId);
-      const latestStatus = itemString(latest, 'status');
-      if (isTerminal(latestStatus)) {
-        return json(200, { ok: true, duplicate: true, status: latestStatus.toLowerCase() });
-      }
-      return json(409, { error: 'callback_not_available' });
-    }
-    throw error;
-  }
-
-  const taskToken = itemString(claimed, 'taskToken');
-  if (!taskToken) {
-    await finalizeCallback(callbackId, completionId, 'EXPIRED');
-    return json(410, { error: 'callback_expired' });
-  }
-
-  const output = sanitizeCallbackOutput(body, recordingId);
-  try {
-    const terminalStatus = await releaseStepFunction(taskToken, output);
-    await finalizeCallback(callbackId, completionId, terminalStatus);
-    console.info('Recording callback completed', { callbackId, recordingId, status: terminalStatus });
-    return json(200, { ok: true, status: terminalStatus.toLowerCase() });
-  } catch (error) {
-    if (isExpiredTaskTokenError(error)) {
-      await finalizeCallback(callbackId, completionId, 'EXPIRED');
-      console.warn('Recording callback arrived after Step Functions task expired', { callbackId, recordingId });
-      return json(410, { error: 'callback_expired' });
-    }
-
-    try {
-      await rollbackClaim(callbackId, completionId);
-    } catch (rollbackError) {
-      console.error('Unable to release callback claim after Step Functions error', {
-        callbackId,
-        recordingId,
-        error: rollbackError.name,
-      });
-    }
-    console.error('Unable to resume Step Functions callback task', { callbackId, recordingId, error: error.name });
-    return json(503, { error: 'callback_retry_required' });
-  }
-}
-
-function cryptoRandomFallback() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const result = await processCallback({
+    callbackId,
+    body,
+    completionId: String(context.awsRequestId || randomUUID()),
+    nowEpoch: Math.floor(Date.now() / 1000),
+  });
+  return json(result.statusCode, result.payload);
 }
