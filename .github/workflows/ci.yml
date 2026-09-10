@@ -26,6 +26,8 @@ jobs:
         with:
           use-installer: true
           token: ${{ github.token }}
+      - name: Syntax-check deployment scripts
+        run: bash -n pipeline/deploy.sh transform/deploy.sh infrastructure/bootstrap-deployment-role.sh
       - name: Validate deployment role template
         run: sam validate --lint --template infrastructure/github-actions-deploy-role.yaml
 
