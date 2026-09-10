@@ -32,7 +32,7 @@ Resources:
             Condition:
               StringEquals:
                 'token.actions.githubusercontent.com:aud': sts.amazonaws.com
-                'token.actions.githubusercontent.com:sub': repo:antonio1000homens/recordings:ref:refs/heads/master
+                'token.actions.githubusercontent.com:sub': repo:antonio1000homens@36929120/recordings@1364314008:environment:production
       Policies:
         - PolicyName: recordings-deployment
           PolicyDocument:
