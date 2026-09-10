@@ -51,6 +51,8 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
       PIPELINE_ENABLED: ${{ inputs.pipeline_enabled }}
+      SLACK_NOTIFICATIONS_ENABLED: ${{ vars.SLACK_NOTIFICATIONS_ENABLED || 'true' }}
+      CALLBACK_TIMEOUT_SECONDS: ${{ vars.CALLBACK_TIMEOUT_SECONDS || '3600' }}
       PLAN_ONLY: ${{ inputs.operation == 'plan' }}
       ALLOW_STACK_RECREATE: ${{ inputs.confirm_stack_recreate }}
     steps:
@@ -67,6 +69,8 @@ jobs:
           echo "### Recordings production ${{ inputs.operation }}" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Ref: \`${GITHUB_REF}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Pipeline enabled: \`${PIPELINE_ENABLED}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Slack notifications enabled: \`${SLACK_NOTIFICATIONS_ENABLED}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Callback timeout seconds: \`${CALLBACK_TIMEOUT_SECONDS}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Stack recreation permitted: \`${ALLOW_STACK_RECREATE}\`" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Check public source boundary
@@ -119,12 +123,18 @@ jobs:
           BWS_ACCESS_TOKEN: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
           BW_RECORDINGS_SHARED_SECRET: ${{ secrets.BW_RECORDINGS_SHARED_SECRET }}
           BW_GEMINI_API_KEY: ${{ secrets.BW_GEMINI_API_KEY }}
+          BW_RECORDINGS_DELIVERY_WEBHOOK: ${{ secrets.BW_RECORDINGS_DELIVERY_WEBHOOK }}
+          BW_RECORDINGS_SLACK_WEBHOOK: ${{ secrets.BW_RECORDINGS_SLACK_WEBHOOK }}
         run: |
           test -n "${AWS_ROLE_TO_ASSUME}" || { echo 'AWS_ROLE_TO_ASSUME is not configured in the production environment.' >&2; exit 1; }
           test -n "${CODE_BUCKET}" || { echo 'CODE_BUCKET is not configured in the production environment.' >&2; exit 1; }
           test -n "${BWS_ACCESS_TOKEN}" || { echo 'BWS_GITHUB_ACTIONS_RECORDINGS_APP is not configured in the production environment.' >&2; exit 1; }
           test -n "${BW_RECORDINGS_SHARED_SECRET}" || { echo 'BW_RECORDINGS_SHARED_SECRET is not configured as a production environment secret.' >&2; exit 1; }
           test -n "${BW_GEMINI_API_KEY}" || { echo 'BW_GEMINI_API_KEY is not configured as a production environment secret.' >&2; exit 1; }
+          test -n "${BW_RECORDINGS_DELIVERY_WEBHOOK}" || { echo 'BW_RECORDINGS_DELIVERY_WEBHOOK is not configured as a production environment secret.' >&2; exit 1; }
+          if [[ "${SLACK_NOTIFICATIONS_ENABLED}" == "true" ]]; then
+            test -n "${BW_RECORDINGS_SLACK_WEBHOOK}" || { echo 'BW_RECORDINGS_SLACK_WEBHOOK is required when Slack notifications are enabled.' >&2; exit 1; }
+          fi
 
       - name: Load recordings secrets from Bitwarden Secrets Manager
         uses: bitwarden/sm-action@v3.0.1
@@ -133,6 +143,15 @@ jobs:
           secrets: |
             ${{ secrets.BW_RECORDINGS_SHARED_SECRET }} > RECORDINGS_TRANSFORM_SHARED_SECRET
             ${{ secrets.BW_GEMINI_API_KEY }} > GEMINI_API_KEY
+            ${{ secrets.BW_RECORDINGS_DELIVERY_WEBHOOK }} > RECORDINGS_DELIVERY_WEBHOOK
+
+      - name: Load Slack webhook from Bitwarden Secrets Manager
+        if: ${{ env.SLACK_NOTIFICATIONS_ENABLED == 'true' }}
+        uses: bitwarden/sm-action@v3.0.1
+        with:
+          access_token: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
+          secrets: |
+            ${{ secrets.BW_RECORDINGS_SLACK_WEBHOOK }} > RECORDINGS_SLACK_WEBHOOK
 
       - name: Configure recordings-only AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.0.0
@@ -160,6 +179,10 @@ jobs:
           S3_PREFIX: recordings/pipeline
           RECORDINGS_TRANSFORM_SHARED_SECRET: ${{ env.RECORDINGS_TRANSFORM_SHARED_SECRET }}
           GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
+          RECORDINGS_DELIVERY_WEBHOOK: ${{ env.RECORDINGS_DELIVERY_WEBHOOK }}
+          RECORDINGS_SLACK_WEBHOOK: ${{ env.RECORDINGS_SLACK_WEBHOOK }}
+          SLACK_NOTIFICATIONS_ENABLED: ${{ env.SLACK_NOTIFICATIONS_ENABLED }}
+          CALLBACK_TIMEOUT_SECONDS: ${{ env.CALLBACK_TIMEOUT_SECONDS }}
           PIPELINE_ENABLED: ${{ env.PIPELINE_ENABLED }}
           SKIP_SAM_BUILD: 'true'
           PLAN_ONLY: ${{ env.PLAN_ONLY }}

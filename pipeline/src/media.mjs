@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import ffmpegPath from 'ffmpeg-static';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { chunkWindows, parseDuration, recordingIdFromKey } from './media-core.mjs';
+import { chunkWindows, parseDuration, recordingIdFromKey, safeFilename } from './media-core.mjs';
 
 const s3 = new S3Client({});
 
@@ -35,6 +35,18 @@ async function probeDuration(inputPath) {
   return parseDuration(stderr);
 }
 
+function sourceMetadata(bucket, key, contentType) {
+  const rawFilename = String(key || '').split('/').pop() || 'recording.m4a';
+  let filename = rawFilename;
+  try { filename = decodeURIComponent(rawFilename); } catch { /* keep raw S3 key component */ }
+  return {
+    bucket,
+    key,
+    filename: safeFilename(filename),
+    content_type: contentType,
+  };
+}
+
 export async function handler(event) {
   const bucket = event?.bucket;
   const key = event?.key;
@@ -46,12 +58,14 @@ export async function handler(event) {
 
   try {
     const contentType = event.content_type || await download(bucket, key, inputPath);
+    const source = sourceMetadata(bucket, key, contentType);
     const durationSeconds = await probeDuration(inputPath);
     const windows = chunkWindows(durationSeconds);
 
     if (windows.length === 1) {
       return {
         recording_id: recordingId,
+        source,
         route: 'direct',
         duration_seconds: durationSeconds,
         chunk_step_seconds: 360,
@@ -93,6 +107,7 @@ export async function handler(event) {
 
     return {
       recording_id: recordingId,
+      source,
       route: 'split',
       duration_seconds: durationSeconds,
       chunk_step_seconds: 360,
