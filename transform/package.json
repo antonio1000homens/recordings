@@ -1,0 +1,10 @@
+{
+  "name": "recordings-transform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/handler.mjs && node --check src/transform.mjs && node --check src/direct.mjs",
+    "test": "node --test"
+  }
+}
