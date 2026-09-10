@@ -3,7 +3,7 @@ set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-eu-west-2}"
 STACK_NAME="${STACK_NAME:-recordings-transform-lambda}"
-S3_PREFIX="${S3_PREFIX:-recordings-transform}"
+S3_PREFIX="${S3_PREFIX:-recordings/transform}"
 SKIP_SAM_BUILD="${SKIP_SAM_BUILD:-false}"
 
 : "${CODE_BUCKET:?CODE_BUCKET is required}"
