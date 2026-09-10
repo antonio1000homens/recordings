@@ -238,10 +238,13 @@ test('state machine starts with Slack, converges both branches, signs late and w
   assert.match(template, /"Next": "CallbackTimeout"/);
 });
 
-test('callback implementation uses success and failure task-token APIs without logging the token', async () => {
-  const source = await fs.readFile(new URL('../src/callback.mjs', import.meta.url), 'utf8');
-  assert.match(source, /SendTaskSuccessCommand/);
-  assert.match(source, /SendTaskFailureCommand/);
-  assert.match(source, /REMOVE taskToken/);
-  assert.doesNotMatch(source, /console\.(?:info|warn|error)\([^\n]*taskToken/);
+test('callback implementation uses task-token APIs without logging task tokens or callback bearer identifiers', async () => {
+  const callbackSource = await fs.readFile(new URL('../src/callback.mjs', import.meta.url), 'utf8');
+  const deliverySource = await fs.readFile(new URL('../src/delivery.mjs', import.meta.url), 'utf8');
+  assert.match(callbackSource, /SendTaskSuccessCommand/);
+  assert.match(callbackSource, /SendTaskFailureCommand/);
+  assert.match(callbackSource, /REMOVE taskToken/);
+  assert.doesNotMatch(callbackSource, /console\.(?:info|warn|error)\([^\n]*taskToken/);
+  assert.doesNotMatch(callbackSource, /console\.(?:info|warn|error)[\s\S]{0,220}?callbackId/);
+  assert.doesNotMatch(deliverySource, /console\.(?:info|warn|error)[\s\S]{0,220}?callbackId/);
 });
