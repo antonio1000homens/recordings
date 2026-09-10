@@ -83,11 +83,12 @@ operation: plan
 confirm_deploy: false
 pipeline_enabled: true
 confirm_disable_pipeline: false
+confirm_stack_recreate: false
 ```
 
 Plan mode uses the same built templates, secrets, stack names, SAM code bucket and artifact prefixes as a real deployment, but passes `--no-execute-changeset` to SAM. CloudFormation creates change sets for inspection and does not update stack resources.
 
-Plan mode also refuses to delete/recreate a stack if an existing stack is in an unrecoverable state. Recovery actions remain deploy-only and should be reviewed separately.
+Plan mode refuses to delete/recreate a stack if an existing stack is in an unrecoverable state. A real deployment also refuses to delete/recreate an unhealthy stack unless the operator explicitly sets `confirm_stack_recreate=true` after investigating the failure. This emergency recovery flag defaults to false and should not be used during a normal repository migration.
 
 If `pipeline_enabled=false` is intentionally selected, `confirm_disable_pipeline=true` is also required. This prevents an accidental workflow selection from disabling the EventBridge ingestion path.
 
@@ -102,6 +103,7 @@ operation: deploy
 confirm_deploy: true
 pipeline_enabled: true
 confirm_disable_pipeline: false
+confirm_stack_recreate: false
 ```
 
 The workflow deploys transform first, then pipeline, and verifies that both CloudFormation stacks and the Step Functions state machine are describable afterwards.
