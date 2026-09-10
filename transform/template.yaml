@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: HTTP transformation service for the recordings workflow.
+
+Parameters:
+  SharedSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 24
+
+Resources:
+  RecordingsTransformLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/recordings-transform
+      RetentionInDays: 14
+
+  RecordingsTransformFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: recordings-transform-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: recordings-transform-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-transform:*
+
+  RecordingsTransformFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: RecordingsTransformLogGroup
+    Properties:
+      FunctionName: recordings-transform
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: src/handler.handler
+      CodeUri: .
+      Role: !GetAtt RecordingsTransformFunctionRole.Arn
+      MemorySize: 128
+      Timeout: 15
+      Environment:
+        Variables:
+          RECORDINGS_TRANSFORM_SHARED_SECRET: !Ref SharedSecret
+      FunctionUrlConfig:
+        AuthType: NONE
+        InvokeMode: BUFFERED
+
+  RecordingsTransformUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RecordingsTransformFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  RecordingsTransformInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RecordingsTransformFunction
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
+Outputs:
+  FunctionUrl:
+    Description: Function URL used by external HTTP integrations.
+    Value: !GetAtt RecordingsTransformFunctionUrl.FunctionUrl
+  FunctionName:
+    Value: !Ref RecordingsTransformFunction
+  ExecutionRoleArn:
+    Value: !GetAtt RecordingsTransformFunctionRole.Arn
