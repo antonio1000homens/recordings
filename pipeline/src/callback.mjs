@@ -240,12 +240,12 @@ export async function processCallback({ callbackId, body, completionId, nowEpoch
   try {
     const terminalStatus = await dependencies.releaseStepFunction(taskToken, output);
     await dependencies.finalizeCallback(callbackId, completionId, terminalStatus);
-    console.info('Recording callback completed', { callbackId, recordingId, status: terminalStatus });
+    console.info('Recording callback completed', { recordingId, status: terminalStatus });
     return { statusCode: 200, payload: { ok: true, status: terminalStatus.toLowerCase() } };
   } catch (error) {
     if (isExpiredTaskTokenError(error)) {
       await dependencies.finalizeCallback(callbackId, completionId, 'EXPIRED');
-      console.warn('Recording callback arrived after Step Functions task expired', { callbackId, recordingId });
+      console.warn('Recording callback arrived after Step Functions task expired', { recordingId });
       return { statusCode: 410, payload: { error: 'callback_expired' } };
     }
 
@@ -253,12 +253,11 @@ export async function processCallback({ callbackId, body, completionId, nowEpoch
       await dependencies.rollbackClaim(callbackId, completionId);
     } catch (rollbackError) {
       console.error('Unable to release callback claim after Step Functions error', {
-        callbackId,
         recordingId,
         error: rollbackError.name,
       });
     }
-    console.error('Unable to resume Step Functions callback task', { callbackId, recordingId, error: error.name });
+    console.error('Unable to resume Step Functions callback task', { recordingId, error: error.name });
     return { statusCode: 503, payload: { error: 'callback_retry_required' } };
   }
 }
