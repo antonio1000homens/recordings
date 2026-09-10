@@ -5,6 +5,8 @@ AWS_REGION="${AWS_REGION:-eu-west-2}"
 STACK_NAME="${STACK_NAME:-recordings-pipeline}"
 S3_PREFIX="${S3_PREFIX:-recordings/pipeline}"
 PIPELINE_ENABLED="${PIPELINE_ENABLED:-true}"
+SLACK_NOTIFICATIONS_ENABLED="${SLACK_NOTIFICATIONS_ENABLED:-true}"
+CALLBACK_TIMEOUT_SECONDS="${CALLBACK_TIMEOUT_SECONDS:-3600}"
 SKIP_SAM_BUILD="${SKIP_SAM_BUILD:-false}"
 PLAN_ONLY="${PLAN_ONLY:-false}"
 ALLOW_STACK_RECREATE="${ALLOW_STACK_RECREATE:-false}"
@@ -12,6 +14,21 @@ ALLOW_STACK_RECREATE="${ALLOW_STACK_RECREATE:-false}"
 : "${CODE_BUCKET:?CODE_BUCKET is required}"
 : "${RECORDINGS_TRANSFORM_SHARED_SECRET:?RECORDINGS_TRANSFORM_SHARED_SECRET is required}"
 : "${GEMINI_API_KEY:?GEMINI_API_KEY is required}"
+: "${RECORDINGS_DELIVERY_WEBHOOK:?RECORDINGS_DELIVERY_WEBHOOK is required}"
+
+if [[ "${SLACK_NOTIFICATIONS_ENABLED}" != "true" && "${SLACK_NOTIFICATIONS_ENABLED}" != "false" ]]; then
+  echo "SLACK_NOTIFICATIONS_ENABLED must be 'true' or 'false'." >&2
+  exit 2
+fi
+
+if [[ "${SLACK_NOTIFICATIONS_ENABLED}" == "true" ]]; then
+  : "${RECORDINGS_SLACK_WEBHOOK:?RECORDINGS_SLACK_WEBHOOK is required when Slack notifications are enabled}"
+fi
+
+if ! [[ "${CALLBACK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || (( CALLBACK_TIMEOUT_SECONDS < 2700 || CALLBACK_TIMEOUT_SECONDS > 3600 )); then
+  echo "CALLBACK_TIMEOUT_SECONDS must be an integer between 2700 and 3600." >&2
+  exit 2
+fi
 
 if [[ "${PLAN_ONLY}" != "true" && "${PLAN_ONLY}" != "false" ]]; then
   echo "PLAN_ONLY must be 'true' or 'false'." >&2
@@ -93,6 +110,10 @@ sam deploy "${deploy_args[@]}" \
   --parameter-overrides \
     "SharedSecret=${RECORDINGS_TRANSFORM_SHARED_SECRET}" \
     "GeminiApiKey=${GEMINI_API_KEY}" \
+    "SlackWebhook=${RECORDINGS_SLACK_WEBHOOK:-}" \
+    "DeliveryWebhook=${RECORDINGS_DELIVERY_WEBHOOK}" \
+    "SlackNotificationsEnabled=${SLACK_NOTIFICATIONS_ENABLED}" \
+    "CallbackTimeoutSeconds=${CALLBACK_TIMEOUT_SECONDS}" \
     "PipelineEnabled=${PIPELINE_ENABLED}"
 
 if [[ "${PLAN_ONLY}" == "true" ]]; then
