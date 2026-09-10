@@ -3,7 +3,7 @@ set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-eu-west-2}"
 STACK_NAME="${STACK_NAME:-recordings-pipeline}"
-S3_PREFIX="${S3_PREFIX:-recordings-pipeline}"
+S3_PREFIX="${S3_PREFIX:-recordings/pipeline}"
 PIPELINE_ENABLED="${PIPELINE_ENABLED:-true}"
 SKIP_SAM_BUILD="${SKIP_SAM_BUILD:-false}"
 

@@ -26,7 +26,14 @@ repo:antonio1000homens@36929120/recordings@1364314008:environment:production
 
 The workflow independently refuses to deploy unless `github.ref` is exactly `refs/heads/master`.
 
-The role policy is restricted to the existing recordings stacks, Lambda functions, runtime roles, log groups, recordings bucket, Step Functions state machine, EventBridge rule and the two recordings prefixes in the SAM code bucket.
+The role policy is restricted to the existing recordings stacks, Lambda functions, runtime roles, log groups, recordings bucket, Step Functions state machine, EventBridge rule and only these SAM deployment artifact prefixes:
+
+```text
+recordings/pipeline/*
+recordings/transform/*
+```
+
+The old top-level SAM artifact prefixes may remain in the code bucket as historical deployment objects; the recordings-only role does not require access to them.
 
 ## 2. Create the GitHub `production` environment
 

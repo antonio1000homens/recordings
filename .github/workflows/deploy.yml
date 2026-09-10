@@ -113,6 +113,7 @@ jobs:
         working-directory: transform
         env:
           CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
+          S3_PREFIX: recordings/transform
           RECORDINGS_TRANSFORM_SHARED_SECRET: ${{ env.RECORDINGS_TRANSFORM_SHARED_SECRET }}
           SKIP_SAM_BUILD: 'true'
         run: bash ./deploy.sh
@@ -121,6 +122,7 @@ jobs:
         working-directory: pipeline
         env:
           CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
+          S3_PREFIX: recordings/pipeline
           RECORDINGS_TRANSFORM_SHARED_SECRET: ${{ env.RECORDINGS_TRANSFORM_SHARED_SECRET }}
           GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
           PIPELINE_ENABLED: ${{ env.PIPELINE_ENABLED }}
