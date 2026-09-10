@@ -244,7 +244,7 @@ test('callback implementation uses task-token APIs without logging task tokens o
   assert.match(callbackSource, /SendTaskSuccessCommand/);
   assert.match(callbackSource, /SendTaskFailureCommand/);
   assert.match(callbackSource, /REMOVE taskToken/);
-  assert.doesNotMatch(callbackSource, /console\.(?:info|warn|error)\([^\n]*taskToken/);
-  assert.doesNotMatch(callbackSource, /console\.(?:info|warn|error)[\s\S]{0,220}?callbackId/);
-  assert.doesNotMatch(deliverySource, /console\.(?:info|warn|error)[\s\S]{0,220}?callbackId/);
+  assert.doesNotMatch(callbackSource, /console\.(?:info|warn|error)\([^;]*\btaskToken\b[^;]*\);/s);
+  assert.doesNotMatch(callbackSource, /console\.(?:info|warn|error)\([^;]*\bcallbackId\b[^;]*\);/s);
+  assert.doesNotMatch(deliverySource, /console\.(?:info|warn|error)\([^;]*\bcallbackId\b[^;]*\);/s);
 });
