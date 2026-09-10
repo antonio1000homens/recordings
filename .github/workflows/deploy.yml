@@ -3,8 +3,16 @@ name: Deploy Recordings
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: 'Create a deployment plan or execute the deployment'
+        required: true
+        default: plan
+        type: choice
+        options:
+          - plan
+          - deploy
       confirm_deploy:
-        description: 'Deploy the existing recordings production stacks'
+        description: 'Required only for deploy: confirm production execution'
         required: true
         default: false
         type: boolean
@@ -27,14 +35,21 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ inputs.confirm_deploy == true && github.ref == 'refs/heads/master' }}
+    if: ${{ github.ref == 'refs/heads/master' && (inputs.operation == 'plan' || (inputs.operation == 'deploy' && inputs.confirm_deploy == true)) }}
     runs-on: ubuntu-latest
     environment: production
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
       PIPELINE_ENABLED: ${{ inputs.pipeline_enabled }}
+      PLAN_ONLY: ${{ inputs.operation == 'plan' }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Record requested operation
+        run: |
+          echo "### Recordings production ${{ inputs.operation }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Ref: \`${GITHUB_REF}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Pipeline enabled: \`${PIPELINE_ENABLED}\`" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Check public source boundary
         run: bash scripts/check-public-source.sh
@@ -109,16 +124,17 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           mask-aws-account-id: true
 
-      - name: Deploy transform
+      - name: ${{ inputs.operation == 'plan' && 'Plan transform changes' || 'Deploy transform' }}
         working-directory: transform
         env:
           CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
           S3_PREFIX: recordings/transform
           RECORDINGS_TRANSFORM_SHARED_SECRET: ${{ env.RECORDINGS_TRANSFORM_SHARED_SECRET }}
           SKIP_SAM_BUILD: 'true'
+          PLAN_ONLY: ${{ env.PLAN_ONLY }}
         run: bash ./deploy.sh
 
-      - name: Deploy pipeline
+      - name: ${{ inputs.operation == 'plan' && 'Plan pipeline changes' || 'Deploy pipeline' }}
         working-directory: pipeline
         env:
           CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
@@ -127,10 +143,16 @@ jobs:
           GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
           PIPELINE_ENABLED: ${{ env.PIPELINE_ENABLED }}
           SKIP_SAM_BUILD: 'true'
+          PLAN_ONLY: ${{ env.PLAN_ONLY }}
         run: bash ./deploy.sh
 
       - name: Verify deployed resources are describable
+        if: ${{ inputs.operation == 'deploy' }}
         run: |
           aws cloudformation describe-stacks --stack-name recordings-transform-lambda --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text
           aws cloudformation describe-stacks --stack-name recordings-pipeline --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text
           aws stepfunctions describe-state-machine --state-machine-arn "$(aws cloudformation describe-stacks --stack-name recordings-pipeline --region "${AWS_REGION}" --query "Stacks[0].Outputs[?OutputKey=='StateMachineArn'].OutputValue | [0]" --output text)" --query 'status' --output text
+
+      - name: Confirm plan was non-executing
+        if: ${{ inputs.operation == 'plan' }}
+        run: echo 'Change sets were created for inspection only; no CloudFormation resource updates were executed.'
