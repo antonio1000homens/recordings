@@ -120,7 +120,7 @@ jobs:
           test -n "${BW_GEMINI_API_KEY}" || { echo 'BW_GEMINI_API_KEY is not configured as a production environment secret.' >&2; exit 1; }
 
       - name: Load recordings secrets from Bitwarden Secrets Manager
-        uses: bitwarden/sm-action@v3
+        uses: bitwarden/sm-action@v3.0.1
         with:
           access_token: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
           secrets: |
