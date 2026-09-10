@@ -2,7 +2,7 @@
 
 AWS-native workflow for ingesting, processing, transcribing and delivering personal audio recordings.
 
-This public repository was extracted as a **sanitised snapshot** from the private `antonio1000homens/lambdas` repository. Private monorepo Git history is intentionally not imported.
+This public repository was extracted as a **sanitised snapshot** from a private monorepo. Private monorepo Git history is intentionally not imported.
 
 ## Components
 
@@ -19,7 +19,7 @@ The source repository is public; recording data is not.
 - Runtime recordings remain in an S3 bucket with public access blocked.
 - HTTP endpoints use an application-level recordings secret where appropriate.
 - CI for pull requests is unprivileged and receives no AWS or Bitwarden credentials.
-- Production deployment will use a dedicated recordings-only GitHub Actions OIDC role and a recordings-scoped secret-management credential before deployment ownership is moved here.
+- Production deployment uses a dedicated recordings-only GitHub Actions OIDC role and a recordings-scoped Bitwarden Secrets Manager machine account/project.
 
 Run the repository source-boundary check locally with:
 
@@ -38,17 +38,23 @@ npm test
 npm run check
 
 cd ../pipeline
-npm install
+npm ci
 npm test
 npm run check
 ```
 
 AWS SAM is used to validate/build the application templates.
 
+## Deployment
+
+Production deployment remains intentionally **manual-only** during repository migration.
+
+The deployment-readiness infrastructure and GitHub environment setup are documented in [`infrastructure/README.md`](infrastructure/README.md). The workflow builds/tests both packages before any AWS or Bitwarden credential is loaded and deploys `transform` before `pipeline`.
+
+Existing production stack and resource names are preserved so repository migration changes the deployment owner rather than recreating the recordings application.
+
 ## Migration status
 
-The repository is currently in the **source extraction / validation phase**. The existing production deployment remains owned by the private `lambdas` repository until the dedicated AWS OIDC role, recordings-scoped secrets and production change-set checks are complete.
+The repository has completed source extraction and is preparing for deployment ownership cutover. See [`MIGRATION.md`](MIGRATION.md) for the remaining bootstrap, smoke-test and private-repository retirement steps.
 
-The large `pipeline/package-lock.json` has not yet been copied because the connector used for the snapshot truncates that file and local npm regeneration was unavailable. CI therefore uses `npm install --no-package-lock` for the pipeline temporarily. The exact lockfile must be restored and CI switched back to `npm ci` **before production deployment ownership moves to this repository**.
-
-The intended default branch is `master`.
+The default branch is `master`.

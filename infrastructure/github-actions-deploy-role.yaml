@@ -1,0 +1,212 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dedicated least-privilege GitHub Actions OIDC deployment role for the recordings repository.
+
+Parameters:
+  CodeBucketName:
+    Type: String
+    MinLength: 3
+    Description: Existing private S3 bucket used by SAM for deployment artifacts.
+  DeploymentRoleName:
+    Type: String
+    Default: GitHubActionsRecordingsDeployRole
+  PipelineStackName:
+    Type: String
+    Default: recordings-pipeline
+  TransformStackName:
+    Type: String
+    Default: recordings-transform-lambda
+
+Resources:
+  RecordingsDeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref DeploymentRoleName
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+                'token.actions.githubusercontent.com:sub': repo:antonio1000homens@36929120/recordings@1364314008:environment:production
+      Policies:
+        - PolicyName: recordings-deployment
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PackageApplicationArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${CodeBucketName}/recordings-pipeline/*
+                  - !Sub arn:${AWS::Partition}:s3:::${CodeBucketName}/recordings-transform/*
+
+              - Sid: InspectCodeBucket
+                Effect: Allow
+                Action: s3:GetBucketLocation
+                Resource: !Sub arn:${AWS::Partition}:s3:::${CodeBucketName}
+
+              - Sid: ListApplicationArtifacts
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::${CodeBucketName}
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - recordings-pipeline/*
+                      - recordings-transform/*
+
+              - Sid: ManageApplicationStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:ListStackResources
+                Resource:
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${PipelineStackName}/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${TransformStackName}/*
+
+              - Sid: ValidateTemplates
+                Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:GetTemplateSummary
+                Resource: '*'
+
+              - Sid: ManageRecordingsFunctions
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetPolicy
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:CreateFunctionUrlConfig
+                  - lambda:UpdateFunctionUrlConfig
+                  - lambda:DeleteFunctionUrlConfig
+                  - lambda:GetFunctionUrlConfig
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:ListTags
+                Resource:
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:recordings-upload
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:recordings-media
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:recordings-ai
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:recordings-transform
+
+              - Sid: ManageRecordingsRuntimeRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListAttachedRolePolicies
+                Resource:
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/recordings-upload-lambda-role
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/recordings-media-lambda-role
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/recordings-ai-lambda-role
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/recordings-transform-lambda-role
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/recordings-transform-lamb-*
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/recordings-pipeline-state-machine-role
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/recordings-pipeline-eventbridge-role
+
+              - Sid: ManageRecordingsLogGroups
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:ListTagsForResource
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-upload*
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-media*
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-ai*
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-transform*
+
+              - Sid: InspectLogGroups
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
+
+              - Sid: ManageRecordingsBucket
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketNotification
+                  - s3:PutBucketNotification
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetLifecycleConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetBucketTagging
+                  - s3:PutBucketTagging
+                Resource: !Sub arn:${AWS::Partition}:s3:::recordings-${AWS::AccountId}-${AWS::Region}
+
+              - Sid: ManageRecordingsStateMachine
+                Effect: Allow
+                Action:
+                  - states:CreateStateMachine
+                  - states:UpdateStateMachine
+                  - states:DeleteStateMachine
+                  - states:DescribeStateMachine
+                  - states:TagResource
+                  - states:UntagResource
+                  - states:ListTagsForResource
+                Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:recordings-pipeline
+
+              - Sid: ManageRecordingsEventRule
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                  - events:TagResource
+                  - events:UntagResource
+                  - events:ListTagsForResource
+                Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/recordings-uploaded
+
+Outputs:
+  DeploymentRoleArn:
+    Description: Store this value as the protected GitHub deployment-role secret for the repository.
+    Value: !GetAtt RecordingsDeploymentRole.Arn
