@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Event-driven phone recording ingestion, chunking and Gemini orchestration.
+Description: Event-driven phone recording ingestion, chunking, Gemini orchestration and external delivery.
 
 Parameters:
   SharedSecret:
@@ -11,6 +11,23 @@ Parameters:
     Type: String
     NoEcho: true
     MinLength: 10
+  SlackWebhook:
+    Type: String
+    NoEcho: true
+    Default: ''
+  DeliveryWebhook:
+    Type: String
+    NoEcho: true
+    MinLength: 10
+  SlackNotificationsEnabled:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+  CallbackTimeoutSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 2700
+    MaxValue: 3600
   PipelineEnabled:
     Type: String
     Default: 'false'
@@ -46,6 +63,23 @@ Resources:
             Prefix: processing/
             ExpirationInDays: 1
 
+  CallbackTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: recordings-callbacks
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: callbackId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: callbackId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expiresAtEpoch
+        Enabled: true
+
   UploadLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -62,6 +96,18 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /aws/lambda/recordings-ai
+      RetentionInDays: 14
+
+  DeliveryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/recordings-delivery
+      RetentionInDays: 14
+
+  CallbackLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/recordings-callback
       RetentionInDays: 14
 
   UploadRole:
@@ -138,6 +184,58 @@ Resources:
                 Action: lambda:InvokeFunction
                 Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TransformFunctionName}
 
+  DeliveryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: recordings-delivery-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: recordings-delivery-runtime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-delivery:*
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub ${RecordingsBucket.Arn}/inbox/*
+                  - !Sub ${RecordingsBucket.Arn}/results/*
+              - Effect: Allow
+                Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+                Resource: !GetAtt CallbackTable.Arn
+
+  CallbackRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: recordings-callback-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: recordings-callback-runtime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/recordings-callback:*
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+                Resource: !GetAtt CallbackTable.Arn
+              - Effect: Allow
+                Action: [states:SendTaskSuccess, states:SendTaskFailure]
+                Resource: '*'
+
   UploadFunction:
     Type: AWS::Serverless::Function
     DependsOn: UploadLogGroup
@@ -207,6 +305,61 @@ Resources:
           GEMINI_TEXT_MODEL: gemini-3.5-flash-lite
           TRANSFORM_FUNCTION_NAME: !Ref TransformFunctionName
 
+  CallbackFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: CallbackLogGroup
+    Properties:
+      FunctionName: recordings-callback
+      Runtime: nodejs22.x
+      Architectures: [x86_64]
+      Handler: src/callback.handler
+      CodeUri: .
+      Role: !GetAtt CallbackRole.Arn
+      MemorySize: 256
+      Timeout: 15
+      Environment:
+        Variables:
+          CALLBACK_TABLE: !Ref CallbackTable
+      FunctionUrlConfig:
+        AuthType: NONE
+        InvokeMode: BUFFERED
+
+  CallbackUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CallbackFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  CallbackInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CallbackFunction
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
+  DeliveryFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: DeliveryLogGroup
+    Properties:
+      FunctionName: recordings-delivery
+      Runtime: nodejs22.x
+      Architectures: [x86_64]
+      Handler: src/delivery.handler
+      CodeUri: .
+      Role: !GetAtt DeliveryRole.Arn
+      MemorySize: 256
+      Timeout: 45
+      Environment:
+        Variables:
+          RECORDINGS_SLACK_WEBHOOK: !Ref SlackWebhook
+          RECORDINGS_DELIVERY_WEBHOOK: !Ref DeliveryWebhook
+          SLACK_NOTIFICATIONS_ENABLED: !Ref SlackNotificationsEnabled
+          CALLBACK_TABLE: !Ref CallbackTable
+          CALLBACK_BASE_URL: !GetAtt CallbackFunctionUrl.FunctionUrl
+
   StateMachineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -227,6 +380,7 @@ Resources:
                 Resource:
                   - !GetAtt MediaFunction.Arn
                   - !GetAtt AiFunction.Arn
+                  - !GetAtt DeliveryFunction.Arn
                   - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TransformFunctionName}
               - Effect: Allow
                 Action: s3:PutObject
@@ -240,9 +394,31 @@ Resources:
       RoleArn: !GetAtt StateMachineRole.Arn
       DefinitionString: !Sub |
         {
-          "Comment": "Transcribe a phone recording with quota-safe Gemini chunking",
-          "StartAt": "ProbeAndChunk",
+          "Comment": "Transcribe a phone recording with quota-safe Gemini chunking and callback-based delivery",
+          "StartAt": "NotifySlackStarted",
           "States": {
+            "NotifySlackStarted": {
+              "Type": "Task",
+              "Resource": "${DeliveryFunction.Arn}",
+              "Parameters": {
+                "action": "notify_started",
+                "bucket.$": "$.detail.bucket.name",
+                "key.$": "$.detail.object.key"
+              },
+              "ResultPath": null,
+              "Retry": [{
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }],
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": null,
+                "Next": "ProbeAndChunk"
+              }],
+              "Next": "ProbeAndChunk"
+            },
             "ProbeAndChunk": {
               "Type": "Task",
               "Resource": "${MediaFunction.Arn}",
@@ -306,19 +482,7 @@ Resources:
                 }
               },
               "ResultPath": "$.final",
-              "Next": "SaveDirectResult"
-            },
-            "SaveDirectResult": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
-              "Parameters": {
-                "Bucket": "${RecordingsBucket}",
-                "Key.$": "States.Format('results/{}.html', $.recording_id)",
-                "Body.$": "$.final.formatted_html",
-                "ContentType": "text/html; charset=utf-8"
-              },
-              "ResultPath": "$.saved",
-              "End": true
+              "Next": "PrepareResultArtifacts"
             },
             "TranscribeChunks": {
               "Type": "Map",
@@ -409,19 +573,120 @@ Resources:
                 }
               },
               "ResultPath": "$.final",
-              "Next": "SaveStitchedResult"
+              "Next": "PrepareResultArtifacts"
             },
-            "SaveStitchedResult": {
+            "PrepareResultArtifacts": {
+              "Type": "Pass",
+              "Parameters": {
+                "audio.$": "$.source",
+                "html": {
+                  "bucket": "${RecordingsBucket}",
+                  "key.$": "States.Format('results/{}.html', $.recording_id)",
+                  "filename.$": "States.Format('{}.html', $.recording_id)"
+                }
+              },
+              "ResultPath": "$.artifacts",
+              "Next": "SaveHtmlResult"
+            },
+            "SaveHtmlResult": {
               "Type": "Task",
               "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
               "Parameters": {
-                "Bucket": "${RecordingsBucket}",
-                "Key.$": "States.Format('results/{}.html', $.recording_id)",
+                "Bucket.$": "$.artifacts.html.bucket",
+                "Key.$": "$.artifacts.html.key",
                 "Body.$": "$.final.formatted_html",
                 "ContentType": "text/html; charset=utf-8"
               },
               "ResultPath": "$.saved",
-              "End": true
+              "Next": "GenerateDeliveryLinks"
+            },
+            "GenerateDeliveryLinks": {
+              "Type": "Task",
+              "Resource": "${DeliveryFunction.Arn}",
+              "Parameters": {
+                "action": "generate_links",
+                "recordingId.$": "$.recording_id",
+                "artifacts.$": "$.artifacts"
+              },
+              "ResultPath": "$.delivery",
+              "Retry": [{
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }],
+              "Next": "NotifySlackArtifactsReady"
+            },
+            "NotifySlackArtifactsReady": {
+              "Type": "Task",
+              "Resource": "${DeliveryFunction.Arn}",
+              "Parameters": {
+                "action": "notify_ready",
+                "delivery.$": "$.delivery"
+              },
+              "ResultPath": null,
+              "Retry": [{
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }],
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": null,
+                "Next": "InvokeIFTTTAndWaitForCallback"
+              }],
+              "Next": "InvokeIFTTTAndWaitForCallback"
+            },
+            "InvokeIFTTTAndWaitForCallback": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "TimeoutSeconds": ${CallbackTimeoutSeconds},
+              "Parameters": {
+                "FunctionName": "${DeliveryFunction.Arn}",
+                "Payload": {
+                  "action": "deliver_and_wait",
+                  "taskToken.$": "$$.Task.Token",
+                  "delivery.$": "$.delivery"
+                }
+              },
+              "ResultPath": "$.downstream",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.Timeout"],
+                  "ResultPath": "$.integration_error",
+                  "Next": "CallbackTimeout"
+                },
+                {
+                  "ErrorEquals": ["DownstreamIntegrationFailed"],
+                  "ResultPath": "$.integration_error",
+                  "Next": "CallbackFailure"
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.integration_error",
+                  "Next": "DeliveryFailure"
+                }
+              ],
+              "Next": "CallbackSuccess"
+            },
+            "CallbackSuccess": {
+              "Type": "Succeed"
+            },
+            "CallbackFailure": {
+              "Type": "Fail",
+              "Error": "DownstreamCallbackFailed",
+              "Cause": "The downstream integration explicitly reported failure."
+            },
+            "CallbackTimeout": {
+              "Type": "Fail",
+              "Error": "DownstreamCallbackTimeout",
+              "Cause": "The downstream integration did not call back before the configured timeout."
+            },
+            "DeliveryFailure": {
+              "Type": "Fail",
+              "Error": "DownstreamDeliveryFailed",
+              "Cause": "The completed recording could not be delivered to the downstream integration."
             }
           }
         }
@@ -468,6 +733,9 @@ Outputs:
   UploadFunctionUrl:
     Description: Tasker calls POST /upload-url here before PUTting the recording to S3.
     Value: !GetAtt UploadFunctionUrl.FunctionUrl
+  CallbackFunctionUrl:
+    Description: Opaque downstream callbacks are POSTed under /recordings/callback/<callbackId>.
+    Value: !GetAtt CallbackFunctionUrl.FunctionUrl
   RecordingsBucketName:
     Value: !Ref RecordingsBucket
   StateMachineArn:
