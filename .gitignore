@@ -1,0 +1,38 @@
+# Dependencies / build output
+node_modules/
+.aws-sam/
+coverage/
+*.zip
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Recordings and media must never be committed
+*.m4a
+*.mp3
+*.wav
+*.aac
+*.flac
+*.ogg
+*.opus
+*.mp4
+
+# Generated transcript / result material
+transcripts/
+recordings/
+results/
+output/
+artifacts/
+*.transcript.html
+*.transcript.json
+
+# Local tooling
+.DS_Store
+.vscode/
+.idea/
