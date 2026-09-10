@@ -18,17 +18,27 @@ bash infrastructure/bootstrap-deployment-role.sh
 
 The script creates/updates the stack `recordings-github-actions-deploy-role` and prints the dedicated deployment-role ARN.
 
-The trust policy accepts GitHub OIDC only when the subject is exactly:
+This repository was created after GitHub enabled immutable OIDC subjects for new repositories. Because the deployment job references the `production` environment, the AWS trust policy matches that immutable environment subject rather than a branch-form subject:
 
 ```text
-repo:antonio1000homens/recordings:ref:refs/heads/master
+repo:antonio1000homens@36929120/recordings@1364314008:environment:production
 ```
+
+The workflow independently refuses to deploy unless `github.ref` is exactly `refs/heads/master`.
 
 The role policy is restricted to the existing recordings stacks, Lambda functions, runtime roles, log groups, recordings bucket, Step Functions state machine, EventBridge rule and the two recordings prefixes in the SAM code bucket.
 
 ## 2. Create the GitHub `production` environment
 
 In repository settings create an environment named `production`.
+
+Under **Deployment branches and tags**, choose **Selected branches and tags** and allow only:
+
+```text
+master
+```
+
+This provides GitHub-side branch enforcement in addition to the workflow's `github.ref` guard. Do not allow arbitrary branches/tags to use the production environment.
 
 Add these **environment secrets**:
 
@@ -63,15 +73,15 @@ Prefer a Gemini API key dedicated to recordings. If the existing key must be reu
 
 ## 4. First deployment
 
-`.github/workflows/deploy.yml` is deliberately `workflow_dispatch` only.
+`.github/workflows/deploy.yml` is deliberately `workflow_dispatch` only and additionally refuses to deploy unless the selected ref is `master`.
 
 Before the first production run:
 
 1. confirm CI on `master` is green;
 2. inspect the OIDC role and its trust policy;
-3. configure the `production` environment above;
+3. configure the `production` environment and restrict it to `master`;
 4. leave the private monorepo deployment in place;
-5. manually run **Deploy Recordings** with `confirm_deploy=true`;
+5. manually run **Deploy Recordings** from `master` with `confirm_deploy=true`;
 6. keep `pipeline_enabled=true` if preserving the currently enabled production ingestion path;
 7. inspect the CloudFormation changes and resulting stack states;
 8. run one direct recording and one chunked recording through the existing endpoint.
