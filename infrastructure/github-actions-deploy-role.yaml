@@ -45,8 +45,8 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                 Resource:
-                  - !Sub arn:${AWS::Partition}:s3:::${CodeBucketName}/recordings-pipeline/*
-                  - !Sub arn:${AWS::Partition}:s3:::${CodeBucketName}/recordings-transform/*
+                  - !Sub arn:${AWS::Partition}:s3:::${CodeBucketName}/recordings/pipeline/*
+                  - !Sub arn:${AWS::Partition}:s3:::${CodeBucketName}/recordings/transform/*
 
               - Sid: InspectCodeBucket
                 Effect: Allow
@@ -60,8 +60,8 @@ Resources:
                 Condition:
                   StringLike:
                     s3:prefix:
-                      - recordings-pipeline/*
-                      - recordings-transform/*
+                      - recordings/pipeline/*
+                      - recordings/transform/*
 
               - Sid: ManageApplicationStacks
                 Effect: Allow
