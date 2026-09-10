@@ -19,12 +19,12 @@ This repository was extracted from a private monorepo using a sanitised source s
 
 - [ ] CI for the deployment-readiness PR passes, including the public-source scan, locked installs, SAM builds and IAM template lint.
 - [ ] Bootstrap `infrastructure/github-actions-deploy-role.yaml` into AWS from a trusted admin/local identity.
-- [ ] Create a GitHub environment named `production`.
+- [ ] Create a GitHub environment named `production` and restrict deployment branches/tags to `master` only.
 - [ ] Configure `AWS_ROLE_TO_ASSUME` and `CODE_BUCKET` as protected `production` environment secrets.
 - [ ] Create a dedicated Bitwarden Secrets Manager project/machine account for recordings.
 - [ ] Configure `BWS_GITHUB_ACTIONS_RECORDINGS_APP` as a protected `production` environment secret.
 - [ ] Configure `BW_RECORDINGS_SHARED_SECRET` and `BW_GEMINI_API_KEY` as `production` environment variables containing the recordings-project Bitwarden secret IDs.
-- [ ] Confirm the dedicated AWS role can only be assumed by `antonio1000homens/recordings` on `refs/heads/master`.
+- [ ] Confirm the dedicated AWS role trusts only this repository's immutable `production`-environment OIDC subject; the workflow and GitHub environment independently restrict deployment to `master`.
 
 ## Required before retiring the private deployment
 
