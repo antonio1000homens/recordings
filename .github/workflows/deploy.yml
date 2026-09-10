@@ -1,0 +1,134 @@
+name: Deploy Recordings
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_deploy:
+        description: 'Deploy the existing recordings production stacks'
+        required: true
+        default: false
+        type: boolean
+      pipeline_enabled:
+        description: 'EventBridge pipeline state after deployment'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: recordings-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ inputs.confirm_deploy == true }}
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      PIPELINE_ENABLED: ${{ inputs.pipeline_enabled }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check public source boundary
+        run: bash scripts/check-public-source.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            transform/package-lock.json
+            pipeline/package-lock.json
+
+      - uses: aws-actions/setup-sam@v3
+        with:
+          use-installer: true
+          token: ${{ github.token }}
+
+      - name: Install transform dependencies
+        working-directory: transform
+        run: npm ci
+
+      - name: Test transform
+        working-directory: transform
+        run: |
+          npm test
+          npm run check
+          sam validate --lint --template template.yaml
+          sam build --template-file template.yaml
+
+      - name: Install pipeline dependencies
+        working-directory: pipeline
+        run: npm ci
+
+      - name: Test pipeline
+        working-directory: pipeline
+        run: |
+          npm test
+          npm run check
+          sam validate --lint --template template.yaml
+          sam build --template-file template.yaml
+
+      - name: Validate deployment IAM template
+        run: sam validate --lint --template infrastructure/github-actions-deploy-role.yaml
+
+      - name: Verify protected deployment configuration exists
+        env:
+          AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
+          BWS_ACCESS_TOKEN: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
+          BW_RECORDINGS_SHARED_SECRET: ${{ vars.BW_RECORDINGS_SHARED_SECRET }}
+          BW_GEMINI_API_KEY: ${{ vars.BW_GEMINI_API_KEY }}
+        run: |
+          test -n "${AWS_ROLE_TO_ASSUME}" || { echo 'AWS_ROLE_TO_ASSUME is not configured in the production environment.' >&2; exit 1; }
+          test -n "${CODE_BUCKET}" || { echo 'CODE_BUCKET is not configured in the production environment.' >&2; exit 1; }
+          test -n "${BWS_ACCESS_TOKEN}" || { echo 'BWS_GITHUB_ACTIONS_RECORDINGS_APP is not configured in the production environment.' >&2; exit 1; }
+          test -n "${BW_RECORDINGS_SHARED_SECRET}" || { echo 'BW_RECORDINGS_SHARED_SECRET is not configured in the production environment.' >&2; exit 1; }
+          test -n "${BW_GEMINI_API_KEY}" || { echo 'BW_GEMINI_API_KEY is not configured in the production environment.' >&2; exit 1; }
+
+      - name: Load recordings secrets from Bitwarden Secrets Manager
+        uses: bitwarden/sm-action@v2.2.0
+        with:
+          access_token: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
+          secrets: |
+            ${{ vars.BW_RECORDINGS_SHARED_SECRET }} > RECORDINGS_TRANSFORM_SHARED_SECRET
+            ${{ vars.BW_GEMINI_API_KEY }} > GEMINI_API_KEY
+
+      - name: Configure recordings-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.0.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: github-actions-recordings-production
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Deploy transform
+        working-directory: transform
+        env:
+          CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
+          RECORDINGS_TRANSFORM_SHARED_SECRET: ${{ env.RECORDINGS_TRANSFORM_SHARED_SECRET }}
+          SKIP_SAM_BUILD: 'true'
+        run: bash ./deploy.sh
+
+      - name: Deploy pipeline
+        working-directory: pipeline
+        env:
+          CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
+          RECORDINGS_TRANSFORM_SHARED_SECRET: ${{ env.RECORDINGS_TRANSFORM_SHARED_SECRET }}
+          GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
+          PIPELINE_ENABLED: ${{ env.PIPELINE_ENABLED }}
+          SKIP_SAM_BUILD: 'true'
+        run: bash ./deploy.sh
+
+      - name: Verify deployed resources are describable
+        run: |
+          aws cloudformation describe-stacks --stack-name recordings-transform-lambda --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text
+          aws cloudformation describe-stacks --stack-name recordings-pipeline --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text
+          aws stepfunctions describe-state-machine --state-machine-arn "$(aws cloudformation describe-stacks --stack-name recordings-pipeline --region "${AWS_REGION}" --query "Stacks[0].Outputs[?OutputKey=='StateMachineArn'].OutputValue | [0]" --output text)" --query 'status' --output text
