@@ -29,6 +29,11 @@ on:
         required: true
         default: false
         type: boolean
+      confirm_stack_recreate:
+        description: 'Emergency recovery only: allow deletion/recreation of an unhealthy recordings stack'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -47,6 +52,7 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
       PIPELINE_ENABLED: ${{ inputs.pipeline_enabled }}
       PLAN_ONLY: ${{ inputs.operation == 'plan' }}
+      ALLOW_STACK_RECREATE: ${{ inputs.confirm_stack_recreate }}
     steps:
       - uses: actions/checkout@v5
 
@@ -61,6 +67,7 @@ jobs:
           echo "### Recordings production ${{ inputs.operation }}" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Ref: \`${GITHUB_REF}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Pipeline enabled: \`${PIPELINE_ENABLED}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Stack recreation permitted: \`${ALLOW_STACK_RECREATE}\`" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Check public source boundary
         run: bash scripts/check-public-source.sh
@@ -143,6 +150,7 @@ jobs:
           RECORDINGS_TRANSFORM_SHARED_SECRET: ${{ env.RECORDINGS_TRANSFORM_SHARED_SECRET }}
           SKIP_SAM_BUILD: 'true'
           PLAN_ONLY: ${{ env.PLAN_ONLY }}
+          ALLOW_STACK_RECREATE: ${{ env.ALLOW_STACK_RECREATE }}
         run: bash ./deploy.sh
 
       - name: ${{ inputs.operation == 'plan' && 'Plan pipeline changes' || 'Deploy pipeline' }}
@@ -155,6 +163,7 @@ jobs:
           PIPELINE_ENABLED: ${{ env.PIPELINE_ENABLED }}
           SKIP_SAM_BUILD: 'true'
           PLAN_ONLY: ${{ env.PLAN_ONLY }}
+          ALLOW_STACK_RECREATE: ${{ env.ALLOW_STACK_RECREATE }}
         run: bash ./deploy.sh
 
       - name: Verify deployed resources are describable
