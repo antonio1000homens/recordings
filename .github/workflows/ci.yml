@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  public-source-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check public source boundary
+        run: bash scripts/check-public-source.sh
+
+  transform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: transform
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: transform/package-lock.json
+      - uses: aws-actions/setup-sam@v3
+      - name: Install dependencies
+        run: npm ci
+      - name: Test
+        run: npm test
+      - name: Syntax check
+        run: npm run check
+      - name: Validate SAM template
+        run: sam validate --lint --template template.yaml
+      - name: Build SAM application
+        run: sam build --template-file template.yaml
+
+  pipeline:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pipeline
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: aws-actions/setup-sam@v3
+      - name: Install dependencies
+        # Temporary during snapshot extraction: restore the exact source lockfile
+        # before deployment ownership moves from the private monorepo.
+        run: npm install --no-package-lock --no-audit --no-fund
+      - name: Test
+        run: npm test
+      - name: Syntax check
+        run: npm run check
+      - name: Validate SAM template
+        run: sam validate --lint --template template.yaml
+      - name: Build SAM application
+        run: sam build --template-file template.yaml
