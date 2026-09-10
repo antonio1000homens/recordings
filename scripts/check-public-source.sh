@@ -13,16 +13,14 @@ check_pattern() {
   fi
 }
 
-# Private-monorepo deployment details must not leak into the public project.
-check_pattern 'private Lambda deployment bucket reference' 'aws2022-lambda-code'
-check_pattern 'broad monorepo AWS deployment role reference' 'GitHubActionsLambdasDeployRole'
-check_pattern 'broad monorepo Bitwarden credential reference' 'BWS_GITHUB_ACTIONS_LAMBDAS_APP'
-check_pattern 'private AWS account identifier' '243857182133'
-check_pattern 'private infrastructure hostname' 'alf-broadcast\.co\.uk'
-check_pattern 'private infrastructure email/domain' 'alf1000\.uk'
+# Generic deployment-data patterns that should not appear in reusable public source.
+check_pattern 'AWS account identifier' '(^|[^0-9])[0-9]{12}([^0-9]|$)'
+check_pattern 'monorepo-style Lambda deployment bucket' 'aws[0-9]{4}-lambda-code'
+check_pattern 'broad Lambda monorepo deployment role' 'GitHubActions[A-Za-z0-9_-]*Lambdas[A-Za-z0-9_-]*DeployRole'
+check_pattern 'broad Lambda monorepo secret-manager credential' 'BWS_GITHUB_ACTIONS_[A-Z0-9_]*LAMBDAS[A-Z0-9_]*'
 
-# Common credential forms. These are intentionally conservative checks, not a
-# replacement for GitHub secret scanning or a dedicated secret scanner.
+# Common credential forms. These are conservative checks, not a replacement for
+# GitHub secret scanning or a dedicated secret scanner.
 check_pattern 'AWS access key-shaped value' 'AKIA[0-9A-Z]{16}'
 check_pattern 'Google API key-shaped value' 'AIza[0-9A-Za-z_-]{35}'
 check_pattern 'private key material' '-----BEGIN (RSA |EC |OPENSSH |)?PRIVATE KEY-----'
