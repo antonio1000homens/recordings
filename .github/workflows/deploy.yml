@@ -24,6 +24,11 @@ on:
         options:
           - 'true'
           - 'false'
+      confirm_disable_pipeline:
+        description: 'Required only when pipeline_enabled=false'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -44,6 +49,12 @@ jobs:
       PLAN_ONLY: ${{ inputs.operation == 'plan' }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Validate requested pipeline state
+        if: ${{ inputs.pipeline_enabled == 'false' && inputs.confirm_disable_pipeline != true }}
+        run: |
+          echo 'pipeline_enabled=false requires confirm_disable_pipeline=true.' >&2
+          exit 1
 
       - name: Record requested operation
         run: |
