@@ -281,7 +281,6 @@ async function deliverAndWait(event) {
     const result = await postJsonWithRetry(webhook, buildDownstreamPayload(delivery, callback));
     console.info('Downstream recording webhook accepted', {
       recordingId,
-      callbackId,
       attempts: result.attempts,
       status: result.status,
     });
@@ -292,13 +291,11 @@ async function deliverAndWait(event) {
     } catch (markError) {
       console.warn('Unable to mark callback record after webhook failure', {
         recordingId,
-        callbackId,
         error: markError.name,
       });
     }
     console.error('Downstream recording webhook delivery failed', {
       recordingId,
-      callbackId,
       error: error.name,
       status: error.status || undefined,
     });
