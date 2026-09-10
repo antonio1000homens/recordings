@@ -24,6 +24,11 @@ on:
         options:
           - 'true'
           - 'false'
+      confirm_disable_pipeline:
+        description: 'Required only when pipeline_enabled=false'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -44,6 +49,12 @@ jobs:
       PLAN_ONLY: ${{ inputs.operation == 'plan' }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Validate requested pipeline state
+        if: ${{ inputs.pipeline_enabled == 'false' && inputs.confirm_disable_pipeline != true }}
+        run: |
+          echo 'pipeline_enabled=false requires confirm_disable_pipeline=true.' >&2
+          exit 1
 
       - name: Record requested operation
         run: |
@@ -99,22 +110,22 @@ jobs:
           AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
           BWS_ACCESS_TOKEN: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
-          BW_RECORDINGS_SHARED_SECRET: ${{ vars.BW_RECORDINGS_SHARED_SECRET }}
-          BW_GEMINI_API_KEY: ${{ vars.BW_GEMINI_API_KEY }}
+          BW_RECORDINGS_SHARED_SECRET: ${{ secrets.BW_RECORDINGS_SHARED_SECRET }}
+          BW_GEMINI_API_KEY: ${{ secrets.BW_GEMINI_API_KEY }}
         run: |
           test -n "${AWS_ROLE_TO_ASSUME}" || { echo 'AWS_ROLE_TO_ASSUME is not configured in the production environment.' >&2; exit 1; }
           test -n "${CODE_BUCKET}" || { echo 'CODE_BUCKET is not configured in the production environment.' >&2; exit 1; }
           test -n "${BWS_ACCESS_TOKEN}" || { echo 'BWS_GITHUB_ACTIONS_RECORDINGS_APP is not configured in the production environment.' >&2; exit 1; }
-          test -n "${BW_RECORDINGS_SHARED_SECRET}" || { echo 'BW_RECORDINGS_SHARED_SECRET is not configured in the production environment.' >&2; exit 1; }
-          test -n "${BW_GEMINI_API_KEY}" || { echo 'BW_GEMINI_API_KEY is not configured in the production environment.' >&2; exit 1; }
+          test -n "${BW_RECORDINGS_SHARED_SECRET}" || { echo 'BW_RECORDINGS_SHARED_SECRET is not configured as a production environment secret.' >&2; exit 1; }
+          test -n "${BW_GEMINI_API_KEY}" || { echo 'BW_GEMINI_API_KEY is not configured as a production environment secret.' >&2; exit 1; }
 
       - name: Load recordings secrets from Bitwarden Secrets Manager
-        uses: bitwarden/sm-action@v2.2.0
+        uses: bitwarden/sm-action@v3
         with:
           access_token: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
           secrets: |
-            ${{ vars.BW_RECORDINGS_SHARED_SECRET }} > RECORDINGS_TRANSFORM_SHARED_SECRET
-            ${{ vars.BW_GEMINI_API_KEY }} > GEMINI_API_KEY
+            ${{ secrets.BW_RECORDINGS_SHARED_SECRET }} > RECORDINGS_TRANSFORM_SHARED_SECRET
+            ${{ secrets.BW_GEMINI_API_KEY }} > GEMINI_API_KEY
 
       - name: Configure recordings-only AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.0.0

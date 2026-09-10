@@ -44,14 +44,14 @@ Add these environment secrets:
 - `AWS_ROLE_TO_ASSUME` — output ARN from the bootstrap stack.
 - `CODE_BUCKET` — existing private SAM deployment bucket name.
 - `BWS_GITHUB_ACTIONS_RECORDINGS_APP` — access token for a Bitwarden Secrets Manager machine account scoped only to the recordings project.
+- `BW_RECORDINGS_SHARED_SECRET` — Bitwarden secret UUID for the recordings HTTP shared secret.
+- `BW_GEMINI_API_KEY` — Bitwarden secret UUID for the recordings Gemini API key.
 
-Add these environment variables:
+Add this environment variable:
 
-- `BW_RECORDINGS_SHARED_SECRET` — Bitwarden secret ID for the recordings HTTP shared secret.
-- `BW_GEMINI_API_KEY` — Bitwarden secret ID for the recordings Gemini API key.
 - `AWS_REGION` — optional; defaults to `eu-west-2`.
 
-Secret IDs are identifiers rather than secret values, but keeping them as environment variables scopes the deployment configuration to `production`.
+The Bitwarden UUIDs are identifiers rather than secret values, but they are stored as GitHub environment secrets so they are masked in public Actions logs.
 
 ## 3. Bitwarden structure
 
@@ -65,6 +65,8 @@ Project: recordings
 Machine account: github-actions-recordings
   Read access: recordings project only
 ```
+
+The machine account must have **Can read** access to the `recordings` project, and the two GitHub `BW_*` environment secrets must contain the UUIDs of the individual secrets above, not the project UUID. Bitwarden returns `404 Resource not found` when the authenticated machine account cannot access a requested secret UUID.
 
 During migration, create recordings-project secret entries without deleting/moving the entries still used by the private monorepo. This allows both deployment paths to coexist until cutover is verified.
 
@@ -80,11 +82,14 @@ For the first cutover, always run **Deploy Recordings** with:
 operation: plan
 confirm_deploy: false
 pipeline_enabled: true
+confirm_disable_pipeline: false
 ```
 
 Plan mode uses the same built templates, secrets, stack names, SAM code bucket and artifact prefixes as a real deployment, but passes `--no-execute-changeset` to SAM. CloudFormation creates change sets for inspection and does not update stack resources.
 
 Plan mode also refuses to delete/recreate a stack if an existing stack is in an unrecoverable state. Recovery actions remain deploy-only and should be reviewed separately.
+
+If `pipeline_enabled=false` is intentionally selected, `confirm_disable_pipeline=true` is also required. This prevents an accidental workflow selection from disabling the EventBridge ingestion path.
 
 Inspect the generated change-set tables in the workflow log. Pay particular attention to any `Remove`, unexpected `Add`, or replacement of stateful resources such as the recordings S3 bucket, Lambda functions, Step Functions state machine or EventBridge rule.
 
@@ -96,6 +101,7 @@ Only after the plan has been reviewed and accepted, manually run **Deploy Record
 operation: deploy
 confirm_deploy: true
 pipeline_enabled: true
+confirm_disable_pipeline: false
 ```
 
 The workflow deploys transform first, then pipeline, and verifies that both CloudFormation stacks and the Step Functions state machine are describable afterwards.
