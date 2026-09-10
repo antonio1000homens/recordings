@@ -8,11 +8,11 @@ The first cutover uses a dedicated GitHub Actions OIDC role and a dedicated Bitw
 
 The AWS account already needs the GitHub Actions OIDC provider for `token.actions.githubusercontent.com`.
 
-Run the bootstrap from a trusted local/admin AWS identity, supplying the **existing private SAM deployment bucket** used by the current recordings deployment:
+Run the bootstrap from a trusted local/admin AWS identity, supplying the existing private SAM deployment bucket used by the current recordings deployment:
 
 ```bash
 AWS_REGION=eu-west-2 \
-CODE_BUCKET='<existing-sam-code-bucket>' \
+CODE_BUCKET='aws2022-lambda-code' \
 bash infrastructure/bootstrap-deployment-role.sh
 ```
 
@@ -24,7 +24,7 @@ This repository was created after GitHub enabled immutable OIDC subjects for new
 repo:antonio1000homens@36929120/recordings@1364314008:environment:production
 ```
 
-The workflow independently refuses to deploy unless `github.ref` is exactly `refs/heads/master`.
+The workflow independently refuses to run unless `github.ref` is exactly `refs/heads/master`.
 
 The role policy is restricted to the existing recordings stacks, Lambda functions, runtime roles, log groups, recordings bucket, Step Functions state machine, EventBridge rule and only these SAM deployment artifact prefixes:
 
@@ -35,25 +35,17 @@ recordings/transform/*
 
 The old top-level SAM artifact prefixes may remain in the code bucket as historical deployment objects; the recordings-only role does not require access to them.
 
-## 2. Create the GitHub `production` environment
+## 2. GitHub `production` environment
 
-In repository settings create an environment named `production`.
+Create an environment named `production` and restrict **Deployment branches and tags** to `master` only.
 
-Under **Deployment branches and tags**, choose **Selected branches and tags** and allow only:
-
-```text
-master
-```
-
-This provides GitHub-side branch enforcement in addition to the workflow's `github.ref` guard. Do not allow arbitrary branches/tags to use the production environment.
-
-Add these **environment secrets**:
+Add these environment secrets:
 
 - `AWS_ROLE_TO_ASSUME` — output ARN from the bootstrap stack.
-- `CODE_BUCKET` — existing private SAM deployment bucket name.
+- `CODE_BUCKET` — `aws2022-lambda-code`.
 - `BWS_GITHUB_ACTIONS_RECORDINGS_APP` — access token for a Bitwarden Secrets Manager machine account scoped only to the recordings project.
 
-Add these **environment variables**:
+Add these environment variables:
 
 - `BW_RECORDINGS_SHARED_SECRET` — Bitwarden secret ID for the recordings HTTP shared secret.
 - `BW_GEMINI_API_KEY` — Bitwarden secret ID for the recordings Gemini API key.
@@ -78,20 +70,37 @@ During migration, create recordings-project secret entries without deleting/movi
 
 Prefer a Gemini API key dedicated to recordings. If the existing key must be reused initially, copy its value into a recordings-project secret entry rather than granting the new machine account access to an unrelated project.
 
-## 4. First deployment
+## 4. Plan before deploying
 
-`.github/workflows/deploy.yml` is deliberately `workflow_dispatch` only and additionally refuses to deploy unless the selected ref is `master`.
+`.github/workflows/deploy.yml` is deliberately `workflow_dispatch` only and refuses to run unless the selected ref is `master`.
 
-Before the first production run:
+For the first cutover, always run **Deploy Recordings** with:
 
-1. confirm CI on `master` is green;
-2. inspect the OIDC role and its trust policy;
-3. configure the `production` environment and restrict it to `master`;
-4. leave the private monorepo deployment in place;
-5. manually run **Deploy Recordings** from `master` with `confirm_deploy=true`;
-6. keep `pipeline_enabled=true` if preserving the currently enabled production ingestion path;
-7. inspect the CloudFormation changes and resulting stack states;
-8. run one direct recording and one chunked recording through the existing endpoint.
+```text
+operation: plan
+confirm_deploy: false
+pipeline_enabled: true
+```
+
+Plan mode uses the same built templates, secrets, stack names, SAM code bucket and artifact prefixes as a real deployment, but passes `--no-execute-changeset` to SAM. CloudFormation creates change sets for inspection and does not update stack resources.
+
+Plan mode also refuses to delete/recreate a stack if an existing stack is in an unrecoverable state. Recovery actions remain deploy-only and should be reviewed separately.
+
+Inspect the generated change-set tables in the workflow log. Pay particular attention to any `Remove`, unexpected `Add`, or replacement of stateful resources such as the recordings S3 bucket, Lambda functions, Step Functions state machine or EventBridge rule.
+
+## 5. First deployment
+
+Only after the plan has been reviewed and accepted, manually run **Deploy Recordings** again from `master` with:
+
+```text
+operation: deploy
+confirm_deploy: true
+pipeline_enabled: true
+```
+
+The workflow deploys transform first, then pipeline, and verifies that both CloudFormation stacks and the Step Functions state machine are describable afterwards.
+
+Leave the private monorepo deployment in place during this first public-repository deployment. Then run one direct recording and one chunked recording through the existing endpoint and verify final HTML/result generation.
 
 Only after those checks pass should the private monorepo workflows/source be removed.
 
