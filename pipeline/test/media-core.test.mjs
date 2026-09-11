@@ -28,7 +28,7 @@ test('recording id uses Samsung filename timestamp and call name', () => {
   assert.equal(
     buildRecordingId('Call recording British Gas Boiler Service_260906_093458.m4a', {
       now: new Date('2030-01-01T00:00:00Z'),
-      uniqueId: '123e4567-e89b-12d3-a456-426614174000',
+      uniqueId: '123e4567-test-id',
     }),
     '20260906-0934-british-gas-boiler-service-123e4567',
   );
@@ -38,7 +38,7 @@ test('recording id falls back to upload UTC time and a generic label', () => {
   assert.equal(
     buildRecordingId('Call recording.m4a', {
       now: new Date('2026-09-11T09:40:12Z'),
-      uniqueId: 'abcdef12-3456-7890-abcd-ef1234567890',
+      uniqueId: 'abcdef12-test-id',
     }),
     '20260911-0940-recording-abcdef12',
   );
@@ -47,7 +47,7 @@ test('recording id falls back to upload UTC time and a generic label', () => {
 test('recording id supports YYYYMMDD timestamps and safe compact labels', () => {
   assert.equal(
     buildRecordingId('Voice recording Café & Support_20260911_104512.m4a', {
-      uniqueId: 'feedface-0000-0000-0000-000000000000',
+      uniqueId: 'feedface-test-id',
     }),
     '20260911-1045-cafe-and-support-feedface',
   );
