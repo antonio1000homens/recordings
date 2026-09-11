@@ -18,12 +18,12 @@ const before = original.slice(0, start);
 const uploadSection = original.slice(start, end);
 const after = original.slice(end);
 
-const noneMatches = uploadSection.match(/AuthType: NONE/g) || [];
+const noneMatches = uploadSection.match(/^\s+AuthType: NONE$/gm) || [];
 if (noneMatches.length !== 1) {
   throw new Error(`Expected exactly one upload AuthType: NONE, found ${noneMatches.length}`);
 }
 
-let hardened = uploadSection.replace('AuthType: NONE', 'AuthType: AWS_IAM');
+let hardened = uploadSection.replace(/^\s+AuthType: NONE$/m, '        AuthType: AWS_IAM');
 
 for (const logicalId of ['UploadUrlPermission', 'UploadInvokePermission']) {
   const block = new RegExp(`\\n  ${logicalId}:\\n[\\s\\S]*?(?=\\n  [A-Za-z0-9]+:|$)`);
@@ -34,7 +34,7 @@ for (const logicalId of ['UploadUrlPermission', 'UploadInvokePermission']) {
 if (/Principal:\s*['\"]?\*['\"]?/.test(hardened)) {
   throw new Error('Public principal remains in hardened upload section');
 }
-if (!/AuthType: AWS_IAM/.test(hardened)) {
+if (!/^\s+AuthType: AWS_IAM$/m.test(hardened)) {
   throw new Error('AWS_IAM auth was not applied to upload Function URL');
 }
 
