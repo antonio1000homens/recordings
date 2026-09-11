@@ -41,6 +41,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   id-token: write
 
 concurrency:
@@ -114,6 +115,7 @@ jobs:
         run: bash scripts/check-public-source.sh
 
       - uses: actions/setup-node@v4
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           node-version: '22'
           cache: npm
@@ -127,10 +129,11 @@ jobs:
           token: ${{ github.token }}
 
       - name: Install transform dependencies
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         working-directory: transform
         run: npm ci
 
-      - name: Test transform for manual deployment
+      - name: Test and build transform for manual deployment
         if: ${{ github.event_name == 'workflow_dispatch' }}
         working-directory: transform
         run: |
@@ -139,16 +142,22 @@ jobs:
           sam validate --lint --template template.yaml
           sam build --template-file template.yaml
 
-      - name: Build CI-tested transform revision
+      - name: Download CI-tested transform SAM build
         if: ${{ github.event_name == 'workflow_run' }}
-        working-directory: transform
-        run: sam build --template-file template.yaml
+        uses: actions/download-artifact@v5
+        with:
+          name: recordings-transform-sam-build
+          path: transform/.aws-sam/build
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
 
       - name: Install pipeline dependencies
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         working-directory: pipeline
         run: npm ci
 
-      - name: Test pipeline for manual deployment
+      - name: Test and build pipeline for manual deployment
         if: ${{ github.event_name == 'workflow_dispatch' }}
         working-directory: pipeline
         run: |
@@ -157,10 +166,22 @@ jobs:
           sam validate --lint --template template.yaml
           sam build --template-file template.yaml
 
-      - name: Build CI-tested pipeline revision
+      - name: Download CI-tested pipeline SAM build
         if: ${{ github.event_name == 'workflow_run' }}
-        working-directory: pipeline
-        run: sam build --template-file template.yaml
+        uses: actions/download-artifact@v5
+        with:
+          name: recordings-pipeline-sam-build
+          path: pipeline/.aws-sam/build
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify CI build artifacts
+        if: ${{ github.event_name == 'workflow_run' }}
+        run: |
+          test -f transform/.aws-sam/build/template.yaml || { echo 'Transform CI SAM artifact is missing build/template.yaml.' >&2; exit 1; }
+          test -f pipeline/.aws-sam/build/template.yaml || { echo 'Pipeline CI SAM artifact is missing build/template.yaml.' >&2; exit 1; }
+          echo "Reusing SAM build artifacts from CI run ${{ github.event.workflow_run.id }} for ${DEPLOY_SHA}."
 
       - name: Validate deployment IAM template for manual deployment
         if: ${{ github.event_name == 'workflow_dispatch' }}
