@@ -20,6 +20,7 @@ The source repository is public; recording data is not.
 - HTTP endpoints use an application-level recordings secret where appropriate.
 - CI for pull requests is unprivileged and receives no AWS or Bitwarden credentials.
 - Production deployment uses a dedicated recordings-only GitHub Actions OIDC role and a recordings-scoped Bitwarden Secrets Manager machine account/project.
+- Automatic production deployment accepts only a successful same-repository `push` CI run for `master`; PR-triggered CI cannot reach production credentials.
 
 Run the repository source-boundary check locally with:
 
@@ -47,9 +48,13 @@ AWS SAM is used to validate/build the application templates.
 
 ## Deployment
 
-Production deployment remains intentionally **manual-only** during repository migration.
+A successful `CI` workflow for a `push` to `master` automatically deploys that exact tested revision to the `production` environment. The deployment workflow checks that the tested SHA is still the current `master` before loading production credentials, builds the already-tested SAM applications, deploys `transform` before `pipeline`, and verifies the resulting CloudFormation stacks and Step Functions state machine.
 
-The deployment-readiness infrastructure and GitHub environment setup are documented in [`infrastructure/README.md`](infrastructure/README.md). The workflow builds/tests both packages before any AWS or Bitwarden credential is loaded and deploys `transform` before `pipeline`.
+The manual **Deploy Recordings** `workflow_dispatch` path remains available for change-set planning, intentional pipeline disablement and emergency stack-recovery operations. Manual deployment retains the full validation/test sequence before credentials are loaded.
+
+GitHub environment protection rules still apply. If the `production` environment is configured with required reviewers, automatic deployment will wait for that GitHub approval; remove that protection if fully unattended deployment is intended.
+
+The deployment-readiness infrastructure and GitHub environment setup are documented in [`infrastructure/README.md`](infrastructure/README.md).
 
 Existing production stack and resource names are preserved so repository migration changes the deployment owner rather than recreating the recordings application.
 
