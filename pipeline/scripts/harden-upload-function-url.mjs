@@ -49,20 +49,29 @@ function hardenSection(source, {
   return before + section + after;
 }
 
-function replaceCallbackBaseUrl(source) {
-  const start = source.indexOf('\n  DeliveryFunction:\n');
-  const end = source.indexOf('\n  CallbackTable:\n');
-  if (start < 0 || end < 0 || end <= start) {
-    throw new Error('Could not locate DeliveryFunction/CallbackTable boundaries in SAM template');
+function resourceSection(source, logicalId) {
+  const start = source.indexOf(`\n  ${logicalId}:\n`);
+  if (start < 0) throw new Error(`Could not locate ${logicalId} in SAM template`);
+
+  const tail = source.slice(start + 1);
+  const nextResource = tail.match(/^  [A-Za-z0-9]+:\s*$/m);
+  if (!nextResource || nextResource.index === 0) {
+    const afterHeader = tail.indexOf('\n');
+    const searchFrom = afterHeader >= 0 ? afterHeader + 1 : tail.length;
+    const remaining = tail.slice(searchFrom);
+    const next = remaining.match(/^  [A-Za-z0-9]+:\s*$/m);
+    const end = next ? start + 1 + searchFrom + next.index : source.length;
+    return { start, end, section: source.slice(start, end) };
   }
 
-  const before = source.slice(0, start);
-  let section = source.slice(start, end);
-  const after = source.slice(end);
+  const end = start + 1 + nextResource.index;
+  return { start, end, section: source.slice(start, end) };
+}
 
-  // SAM build may rewrite !GetAtt into long-form YAML. Treat the complete
-  // CALLBACK_BASE_URL property as the invariant instead of depending on one
-  // serialized representation, but only inside DeliveryFunction and only once.
+function replaceCallbackBaseUrl(source) {
+  const { start, end, section: originalSection } = resourceSection(source, 'DeliveryFunction');
+  let section = originalSection;
+
   const callbackBaseBlock = /^\s+CALLBACK_BASE_URL:\s*(?:.*\n(?:\s{12,}.*\n)*)?/m;
   const matches = section.match(/^\s+CALLBACK_BASE_URL:/gm) || [];
   if (matches.length !== 1 || !callbackBaseBlock.test(section)) {
@@ -78,7 +87,7 @@ function replaceCallbackBaseUrl(source) {
     throw new Error('Public Cloudflare callback base URL was not applied');
   }
 
-  return before + section + after;
+  return source.slice(0, start) + section + source.slice(end);
 }
 
 let hardened = hardenSection(original, {

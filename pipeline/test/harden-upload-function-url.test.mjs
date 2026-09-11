@@ -16,7 +16,7 @@ function runTransform(source) {
 }
 
 function templateFixture(callbackBase = '!GetAtt CallbackFunctionUrl.FunctionUrl') {
-  return `Resources:\n  UploadFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      FunctionUrlConfig:\n        AuthType: NONE\n        InvokeMode: BUFFERED\n\n  UploadUrlPermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunctionUrl\n      FunctionUrlAuthType: NONE\n\n  UploadInvokePermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunction\n      InvokedViaFunctionUrl: true\n\n  MediaFunction:\n    Type: AWS::Serverless::Function\n\n  CallbackFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      FunctionUrlConfig:\n        AuthType: NONE\n\n  CallbackUrlPermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunctionUrl\n      FunctionUrlAuthType: NONE\n\n  CallbackInvokePermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunction\n      InvokedViaFunctionUrl: true\n\n  DeliveryFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      Environment:\n        Variables:\n          CALLBACK_BASE_URL: ${callbackBase}\n\n  CallbackTable:\n    Type: AWS::DynamoDB::Table\n`;
+  return `Resources:\n  UploadFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      FunctionUrlConfig:\n        AuthType: NONE\n        InvokeMode: BUFFERED\n\n  UploadUrlPermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunctionUrl\n      FunctionUrlAuthType: NONE\n\n  UploadInvokePermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunction\n      InvokedViaFunctionUrl: true\n\n  MediaFunction:\n    Type: AWS::Serverless::Function\n\n  CallbackFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      FunctionUrlConfig:\n        AuthType: NONE\n\n  CallbackUrlPermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunctionUrl\n      FunctionUrlAuthType: NONE\n\n  CallbackInvokePermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunction\n      InvokedViaFunctionUrl: true\n\n  DeliveryFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      Environment:\n        Variables:\n          CALLBACK_BASE_URL: ${callbackBase}\n\n  SomeOtherResource:\n    Type: AWS::SNS::Topic\n\n  CallbackTable:\n    Type: AWS::DynamoDB::Table\n`;
 }
 
 test('hardens upload and callback Function URLs and removes public permissions', () => {
@@ -38,6 +38,12 @@ test('accepts SAM-built long-form callback base URL serialization', () => {
   const output = runTransform(input);
   assert.match(output, /CALLBACK_BASE_URL: https:\/\/recordings\.alf-broadcast\.co\.uk\//);
   assert.doesNotMatch(output, /Fn::GetAtt:[\s\S]*CallbackFunctionUrl/);
+});
+
+test('does not depend on CallbackTable immediately following DeliveryFunction', () => {
+  const output = runTransform(templateFixture());
+  assert.match(output, /SomeOtherResource:\n    Type: AWS::SNS::Topic/);
+  assert.match(output, /CallbackTable:\n    Type: AWS::DynamoDB::Table/);
 });
 
 test('fails closed when expected public callback permissions are missing', () => {
