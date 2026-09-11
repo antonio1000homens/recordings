@@ -5,11 +5,15 @@ Parameters:
   UploadFunctionName:
     Type: String
     Default: recordings-upload
+  WorkerInvokerUserName:
+    Type: String
+    Default: recordings-worker-invoker
 
 Resources:
   RecordingsWorkerInvoker:
     Type: AWS::IAM::User
     Properties:
+      UserName: !Ref WorkerInvokerUserName
       Policies:
         - PolicyName: InvokeRecordingsUploadFunctionUrlOnly
           PolicyDocument:

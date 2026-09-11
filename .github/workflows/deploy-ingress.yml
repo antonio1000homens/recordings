@@ -1,0 +1,120 @@
+name: Deploy Recordings Ingress
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: recordings-ingress-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      ${{
+        (github.event_name == 'workflow_run' &&
+         github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.event == 'push' &&
+         github.event.workflow_run.head_branch == 'master' &&
+         github.event.workflow_run.head_repository.full_name == github.repository) ||
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master')
+      }}
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Verify automatic deployment targets current master
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin master
+          current_master="$(git rev-parse origin/master)"
+          test "${TESTED_SHA}" = "${current_master}" || { echo "Refusing stale ingress deployment." >&2; exit 1; }
+
+      - name: Verify protected deployment configuration exists
+        env:
+          AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          BWS_ACCESS_TOKEN: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
+          BW_CF_DEPLOY_API_TOKEN: ${{ vars.BW_CF_DEPLOY_API_TOKEN }}
+          BW_WORKER_AWS_ACCESS_KEY_ID: ${{ vars.BW_RECORDINGS_WORKER_AWS_ACCESS_KEY_ID }}
+          BW_WORKER_AWS_SECRET_ACCESS_KEY: ${{ vars.BW_RECORDINGS_WORKER_AWS_SECRET_ACCESS_KEY }}
+          BW_SHARED_SECRET: ${{ secrets.BW_RECORDINGS_SHARED_SECRET }}
+        run: |
+          for name in AWS_ROLE_TO_ASSUME BWS_ACCESS_TOKEN BW_CF_DEPLOY_API_TOKEN BW_WORKER_AWS_ACCESS_KEY_ID BW_WORKER_AWS_SECRET_ACCESS_KEY BW_SHARED_SECRET; do
+            test -n "${!name:-}" || { echo "${name} is not configured in the production environment." >&2; exit 1; }
+          done
+
+      - name: Load ingress secrets from Bitwarden Secrets Manager
+        uses: bitwarden/sm-action@v3.0.1
+        with:
+          access_token: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
+          secrets: |
+            ${{ vars.BW_CF_DEPLOY_API_TOKEN }} > CLOUDFLARE_API_TOKEN
+            ${{ vars.BW_RECORDINGS_WORKER_AWS_ACCESS_KEY_ID }} > RECORDINGS_WORKER_AWS_ACCESS_KEY_ID
+            ${{ vars.BW_RECORDINGS_WORKER_AWS_SECRET_ACCESS_KEY }} > RECORDINGS_WORKER_AWS_SECRET_ACCESS_KEY
+            ${{ secrets.BW_RECORDINGS_SHARED_SECRET }} > RECORDINGS_SHARED_SECRET
+
+      - name: Configure recordings-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.0.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: github-actions-recordings-ingress
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Deploy Worker invoker IAM stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name recordings-worker-invoker \
+            --template-file infrastructure/recordings-worker-invoker.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+
+      - name: Resolve upload Function URL
+        id: origin
+        run: |
+          url="$(aws lambda get-function-url-config --function-name recordings-upload --region "${AWS_REGION}" --query FunctionUrl --output text)"
+          test -n "${url}" && test "${url}" != "None" || { echo 'recordings-upload Function URL not found.' >&2; exit 1; }
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Worker dependencies
+        working-directory: cloudflare/recordings-ingress
+        run: npm install --no-audit --no-fund
+
+      - name: Test Worker
+        working-directory: cloudflare/recordings-ingress
+        run: npm test
+
+      - name: Sync Worker secrets and deploy
+        env:
+          UPLOAD_ORIGIN_URL: ${{ steps.origin.outputs.url }}
+        run: bash cloudflare/recordings-ingress/deploy-ci.sh
+
+      - name: Summarise ingress deployment
+        run: |
+          echo '### Recordings ingress deployed' >> "${GITHUB_STEP_SUMMARY}"
+          echo '- Worker: `recordings-ingress`' >> "${GITHUB_STEP_SUMMARY}"
+          echo '- IAM stack: `recordings-worker-invoker`' >> "${GITHUB_STEP_SUMMARY}"
+          echo '- Upload origin resolved from AWS at deployment time.' >> "${GITHUB_STEP_SUMMARY}"
+          echo '- Production Lambda Function URL auth is not changed by this workflow.' >> "${GITHUB_STEP_SUMMARY}"
