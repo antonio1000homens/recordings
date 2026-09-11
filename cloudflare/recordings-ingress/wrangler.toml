@@ -2,6 +2,13 @@ name = "recordings-ingress"
 main = "src/index.mjs"
 compatibility_date = "2026-09-11"
 
+# Stable Tasker-facing endpoint. Cloudflare manages the DNS/Worker routing for
+# this custom domain; the generated workers.dev hostname is not part of the
+# client contract.
+routes = [
+  { pattern = "recordings.alf-broadcast.co.uk", custom_domain = true }
+]
+
 # Set these as encrypted Worker secrets, never in this file:
 #   RECORDINGS_SHARED_SECRET
 #   AWS_ACCESS_KEY_ID
@@ -10,5 +17,5 @@ compatibility_date = "2026-09-11"
 # Non-secret configuration is intentionally explicit.
 [vars]
 AWS_REGION = "eu-west-2"
-# Set after the IAM-protected Lambda Function URL is deployed.
+# Overridden by deploy-ci.sh with the deployed recordings-upload Function URL.
 UPLOAD_ORIGIN_URL = "REPLACE_WITH_IAM_PROTECTED_FUNCTION_URL"
