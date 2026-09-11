@@ -94,18 +94,23 @@ pipeline_enabled: true
 confirm_stack_recreate: false
 ```
 
-The automatic path does **not** rerun the full Node/SAM test suite. CI is the test gate. Deployment still:
+The automatic path follows a build-once/deploy-many model. The `transform` and `pipeline` CI jobs each run tests, validation and `sam build`, then publish their `.aws-sam/build` output as one-day GitHub Actions artifacts. Pull-request CI does not publish deployment artifacts.
 
-1. re-runs the cheap public-source safety check before credentials are loaded;
-2. installs deterministic package dependencies with `npm ci`;
-3. builds both SAM applications from the tested revision;
-4. validates protected configuration exists;
-5. resolves runtime secrets through the recordings-scoped Bitwarden machine account;
-6. assumes the recordings-only AWS OIDC role;
-7. deploys `transform`, then `pipeline`;
-8. verifies both CloudFormation stacks and the Step Functions state machine are describable.
+The deployment workflow uses the triggering CI run ID to download those exact build outputs. It does not run `npm ci`, application tests or `sam build` again for an automatic deployment. The deployment scripts run with `SKIP_SAM_BUILD=true`, so the code packaged and deployed is the same SAM build that passed CI.
 
-The production concurrency group is serialized with `cancel-in-progress: false`, so an in-progress deployment is not cancelled part-way through by a later merge.
+Automatic deployment still:
+
+1. checks out the exact CI-tested SHA and refuses stale CI reruns;
+2. re-runs the cheap public-source safety check before credentials are loaded;
+3. downloads the transform and pipeline SAM artifacts from the triggering CI run;
+4. verifies both downloaded artifacts contain `.aws-sam/build/template.yaml`;
+5. validates protected configuration exists;
+6. resolves runtime secrets through the recordings-scoped Bitwarden machine account;
+7. assumes the recordings-only AWS OIDC role;
+8. deploys `transform`, then `pipeline` without rebuilding them;
+9. verifies both CloudFormation stacks and the Step Functions state machine are describable.
+
+The CI deployment artifacts use a one-day retention period because they are only needed for the immediate production deployment. The production concurrency group is serialized with `cancel-in-progress: false`, so an in-progress deployment is not cancelled part-way through by a later merge.
 
 ## 5. Manual plan and emergency deployment
 
@@ -133,7 +138,7 @@ confirm_disable_pipeline: false
 confirm_stack_recreate: false
 ```
 
-Manual runs retain the full tests, syntax checks and SAM validation/build sequence before production credentials are loaded.
+Manual runs retain the full dependency install, tests, syntax checks and SAM validation/build sequence before production credentials are loaded. They do not depend on CI artifacts.
 
 If `pipeline_enabled=false` is intentionally selected, `confirm_disable_pipeline=true` is also required. Stack recreation remains an emergency-only opt-in via `confirm_stack_recreate=true`.
 
