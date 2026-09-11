@@ -90,6 +90,12 @@ else
   sam build --template-file template.yaml
 fi
 
+# The public Function URL permissions are still present in the source SAM template
+# so older/manual environments can be inspected safely, but every supported deploy
+# hardens the built CloudFormation artifact before it reaches AWS. This changes only
+# recordings-upload: the external callback URL remains public pending issue #22.
+node scripts/harden-upload-function-url.mjs .aws-sam/build/template.yaml
+
 deploy_args=(
   --template-file .aws-sam/build/template.yaml
   --stack-name "${STACK_NAME}"
