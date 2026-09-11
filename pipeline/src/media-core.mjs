@@ -1,5 +1,26 @@
 export const CHUNK_STEP_SECONDS = 360;
 export const CHUNK_LENGTH_SECONDS = 365;
+export const DEFAULT_MAX_RECORDING_BYTES = 250 * 1024 * 1024;
+
+export function maxRecordingBytes(value = process.env.MAX_RECORDING_BYTES) {
+  if (value === undefined || value === null || value === '') return DEFAULT_MAX_RECORDING_BYTES;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('MAX_RECORDING_BYTES must be a positive integer');
+  return parsed;
+}
+
+export function assertRecordingSize(contentLength, maxBytes = maxRecordingBytes()) {
+  const size = Number(contentLength);
+  if (!Number.isSafeInteger(size) || size < 0) throw new Error('Recording object size is unavailable or invalid');
+  if (size > maxBytes) {
+    const error = new Error(`Recording exceeds maximum allowed size of ${maxBytes} bytes`);
+    error.name = 'RecordingTooLargeError';
+    error.contentLength = size;
+    error.maxBytes = maxBytes;
+    throw error;
+  }
+  return size;
+}
 
 export function safeFilename(value) {
   const text = String(value || 'recording.m4a').split(/[\\/]/).pop() || 'recording.m4a';

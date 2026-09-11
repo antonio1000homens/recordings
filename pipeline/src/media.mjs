@@ -4,8 +4,15 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import ffmpegPath from 'ffmpeg-static';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { chunkWindows, parseDuration, recordingIdFromKey, safeFilename } from './media-core.mjs';
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  assertRecordingSize,
+  chunkWindows,
+  maxRecordingBytes,
+  parseDuration,
+  recordingIdFromKey,
+  safeFilename,
+} from './media-core.mjs';
 
 const s3 = new S3Client({});
 
@@ -17,6 +24,14 @@ function run(command, args) {
     child.on('error', reject);
     child.on('close', (code) => code === 0 ? resolve(stderr) : reject(new Error(`Command failed (${code}): ${stderr.slice(-4000)}`)));
   });
+}
+
+async function assertSourceSize(bucket, key) {
+  const result = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+  const maxBytes = maxRecordingBytes();
+  const size = assertRecordingSize(result.ContentLength, maxBytes);
+  console.info('Recording size accepted', { key, contentLength: size, maxRecordingBytes: maxBytes });
+  return result.ContentType || null;
 }
 
 async function download(bucket, key, target) {
@@ -57,7 +72,12 @@ export async function handler(event) {
   const inputPath = path.join(workdir, 'input.m4a');
 
   try {
-    const contentType = event.content_type || await download(bucket, key, inputPath);
+    // HEAD the object before downloading or invoking FFmpeg. This is the cost/blast-radius
+    // guardrail for unexpectedly large uploads; oversize objects never reach Gemini.
+    const headContentType = await assertSourceSize(bucket, key);
+    const contentType = event.content_type || headContentType || await download(bucket, key, inputPath);
+    if (headContentType || event.content_type) await download(bucket, key, inputPath);
+
     const source = sourceMetadata(bucket, key, contentType);
     const durationSeconds = await probeDuration(inputPath);
     const windows = chunkWindows(durationSeconds);

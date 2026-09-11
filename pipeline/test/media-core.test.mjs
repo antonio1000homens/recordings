@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRecordingId, chunkWindows, parseDuration, recordingIdFromKey, safeFilename } from '../src/media-core.mjs';
+import {
+  DEFAULT_MAX_RECORDING_BYTES,
+  assertRecordingSize,
+  buildRecordingId,
+  chunkWindows,
+  maxRecordingBytes,
+  parseDuration,
+  recordingIdFromKey,
+  safeFilename,
+} from '../src/media-core.mjs';
 
 test('25:17 recording produces five overlapping windows', () => {
   const windows = chunkWindows(1517);
@@ -51,4 +60,20 @@ test('recording id supports YYYYMMDD timestamps and safe compact labels', () => 
     }),
     '20260911-1045-cafe-and-support-feedface',
   );
+});
+
+test('recording size guardrail defaults to 250 MiB and accepts an exact-boundary object', () => {
+  assert.equal(DEFAULT_MAX_RECORDING_BYTES, 250 * 1024 * 1024);
+  assert.equal(maxRecordingBytes(''), DEFAULT_MAX_RECORDING_BYTES);
+  assert.equal(assertRecordingSize(DEFAULT_MAX_RECORDING_BYTES), DEFAULT_MAX_RECORDING_BYTES);
+});
+
+test('recording size guardrail is configurable and rejects oversize objects', () => {
+  assert.equal(maxRecordingBytes('1024'), 1024);
+  assert.throws(
+    () => assertRecordingSize(1025, 1024),
+    (error) => error.name === 'RecordingTooLargeError' && error.maxBytes === 1024 && error.contentLength === 1025,
+  );
+  assert.throws(() => maxRecordingBytes('0'), /positive integer/);
+  assert.throws(() => assertRecordingSize(undefined, 1024), /unavailable or invalid/);
 });

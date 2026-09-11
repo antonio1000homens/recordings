@@ -4,6 +4,8 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { buildRecordingId, safeFilename } from './media-core.mjs';
 
+export const UPLOAD_URL_EXPIRY_SECONDS = 900;
+
 const s3 = new S3Client({});
 const BUCKET = process.env.RECORDINGS_BUCKET;
 const SHARED_SECRET = process.env.RECORDINGS_SHARED_SECRET || '';
@@ -31,6 +33,12 @@ function parseBody(event) {
   return JSON.parse(raw);
 }
 
+export function buildUploadKey(recordingId, filename) {
+  const key = `inbox/${recordingId}/${safeFilename(filename)}`;
+  if (!key.startsWith('inbox/')) throw new Error('Upload key must be scoped under inbox/');
+  return key;
+}
+
 export async function handler(event) {
   const method = event?.requestContext?.http?.method || 'GET';
   const path = event?.rawPath || '/';
@@ -48,16 +56,16 @@ export async function handler(event) {
   if (!/^audio\//i.test(contentType)) return json(400, { error: 'invalid_content_type' });
 
   const recordingId = buildRecordingId(originalFilename || filename, { uniqueId: randomUUID() });
-  const key = `inbox/${recordingId}/${filename}`;
+  const key = buildUploadKey(recordingId, filename);
   const command = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType });
-  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: UPLOAD_URL_EXPIRY_SECONDS });
 
   return json(200, {
     recording_id: recordingId,
     bucket: BUCKET,
     key,
     upload_url: uploadUrl,
-    expires_in_seconds: 900,
+    expires_in_seconds: UPLOAD_URL_EXPIRY_SECONDS,
     required_headers: { 'content-type': contentType },
   });
 }
