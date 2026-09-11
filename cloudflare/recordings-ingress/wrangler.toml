@@ -2,9 +2,9 @@ name = "recordings-ingress"
 main = "src/index.mjs"
 compatibility_date = "2026-09-11"
 
-# Stable Tasker-facing endpoint. Cloudflare manages the DNS/Worker routing for
-# this custom domain; the generated workers.dev hostname is not part of the
-# client contract.
+# Stable Tasker/callback-facing endpoint. Cloudflare manages the DNS/Worker
+# routing for this custom domain; generated workers.dev/Lambda hostnames are
+# not part of the public client contract.
 routes = [
   { pattern = "recordings.alf-broadcast.co.uk", custom_domain = true }
 ]
@@ -14,8 +14,9 @@ routes = [
 #   AWS_ACCESS_KEY_ID
 #   AWS_SECRET_ACCESS_KEY
 #
-# Non-secret configuration is intentionally explicit.
+# Non-secret configuration is intentionally explicit. Origin Function URLs are
+# overridden by deploy-ci.sh from the deployed AWS resources.
 [vars]
 AWS_REGION = "eu-west-2"
-# Overridden by deploy-ci.sh with the deployed recordings-upload Function URL.
-UPLOAD_ORIGIN_URL = "REPLACE_WITH_IAM_PROTECTED_FUNCTION_URL"
+UPLOAD_ORIGIN_URL = "REPLACE_WITH_IAM_PROTECTED_UPLOAD_FUNCTION_URL"
+CALLBACK_ORIGIN_URL = "REPLACE_WITH_IAM_PROTECTED_CALLBACK_FUNCTION_URL"
