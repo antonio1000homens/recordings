@@ -97,12 +97,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: cloudflare/recordings-ingress/package-lock.json
 
       - name: Install Worker dependencies
         working-directory: cloudflare/recordings-ingress
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Test Worker
         working-directory: cloudflare/recordings-ingress
