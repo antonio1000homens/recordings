@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { safeFilename } from './media-core.mjs';
+import { buildRecordingId, safeFilename } from './media-core.mjs';
 
 const s3 = new S3Client({});
 const BUCKET = process.env.RECORDINGS_BUCKET;
@@ -46,7 +46,7 @@ export async function handler(event) {
   const contentType = String(input.content_type || input.contentType || 'audio/mp4');
   if (!/^audio\//i.test(contentType)) return json(400, { error: 'invalid_content_type' });
 
-  const recordingId = randomUUID();
+  const recordingId = buildRecordingId(filename, { uniqueId: randomUUID() });
   const key = `inbox/${recordingId}/${filename}`;
   const command = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType });
   const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
