@@ -28,10 +28,10 @@ Do not commit secret values.
 
 ## Deployment sequence
 
-1. Deploy the AWS changes that create the dedicated Worker IAM principal and switch the upload Function URL to `AWS_IAM`.
-2. Create an access key for that dedicated principal and add it to the Worker as encrypted secrets.
-3. Set `UPLOAD_ORIGIN_URL` to the Lambda Function URL.
-4. Deploy the Worker.
+1. Deploy `infrastructure/recordings-worker-invoker.yaml` to create the dedicated least-privilege IAM principal.
+2. Create an access key for that principal and add it to the Worker as encrypted secrets.
+3. Modify/deploy the main SAM stack so `recordings-upload` uses `AuthType: AWS_IAM` and no longer has wildcard Function URL invoke permissions.
+4. Set `UPLOAD_ORIGIN_URL` to that Lambda Function URL and deploy the Worker.
 5. Point Tasker at the Worker `/upload-url` endpoint; its request body and `x-recordings-auth` contract remain unchanged.
 6. Verify the Worker returns a presigned URL.
 7. Verify an unsigned direct POST to the Lambda Function URL returns HTTP 403.
@@ -39,3 +39,7 @@ Do not commit secret values.
 ## Credential note
 
 Cloudflare Workers cannot natively assume an AWS IAM role without first possessing an AWS credential or using an additional identity-broker/OIDC design. For this small personal ingress, a dedicated access key with only the two Function URL invocation permissions is deliberately preferred over adding an always-on broker. Rotate/revoke the key independently of the Lambda execution role.
+
+## Safety of this branch
+
+This branch deliberately does **not** switch the production Lambda URL to IAM yet. Doing that before the Worker credentials and endpoint are deployed would interrupt Tasker ingestion. The final SAM cutover should be a coordinated deployment after the Worker secrets have been populated.
