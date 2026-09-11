@@ -4,25 +4,25 @@ AWS-native ingestion, chunking, Gemini orchestration and callback-based external
 
 ## Flow
 
-1. A client requests a pre-signed S3 PUT from `recordings-upload` using `POST /upload-url`.
+1. A client requests a pre-signed S3 PUT from the Cloudflare ingress using `POST /upload-url`.
 2. The client uploads the M4A directly to the private recordings bucket.
 3. S3 emits `Object Created`; EventBridge starts the Standard Step Functions workflow when `PipelineEnabled=true`.
-4. `recordings-delivery` sends a best-effort **Recording workflow started** Slack notification. Slack failure is logged without the webhook value and never blocks media/Gemini processing.
-5. `recordings-media` downloads the recording, probes it with FFmpeg, preserves the source S3 bucket/key/filename in workflow state, and either passes the original through (<= 360 seconds) or creates 365-second chunks every 360 seconds (5-second overlap).
-6. `recordings-ai` uploads each item to Gemini Files, calls `gemini-3.5-transcribe` with speaker diarization, deletes the temporary Gemini file, and invokes `recordings-transform` to compact the raw annotation response before it reaches Step Functions.
-7. Chunked recordings are processed sequentially with a 65-second wait between transcription calls, stitched with `gemini-3.5-flash-lite`, then summarised and speaker-renamed using the deterministic transform Lambda. Direct and chunked paths converge before delivery.
+4. `recordings-delivery` sends a best-effort **Recording workflow started** Slack notification. Slack failure never blocks processing.
+5. `recordings-media` probes/chunks the recording as required.
+6. `recordings-ai` transcribes with Gemini and invokes `recordings-transform` to compact annotation data.
+7. Chunked recordings are processed sequentially, stitched, summarised and speaker-renamed before delivery.
 8. Final HTML is written to `s3://<bucket>/results/<recording-id>.html`.
-9. `recordings-delivery` verifies the source M4A and result HTML exist and creates private pre-signed `GET` URLs with a fixed 1800-second (30-minute) lifetime. The URLs are not written to normal application logs.
-10. A best-effort **Recording ready** Slack message contains labelled **Audio** and **Transcript** links and states that they expire in 30 minutes.
+9. `recordings-delivery` creates private 30-minute pre-signed `GET` URLs for the source audio and result HTML.
+10. A best-effort **Recording ready** Slack message contains labelled Audio/Transcript links.
 11. The workflow enters a Step Functions `waitForTaskToken` task. `recordings-delivery` creates a cryptographically random callback ID, stores the callback-ID-to-task-token mapping in the private `recordings-callbacks` DynamoDB table, and POSTs the recording payload to the configured downstream webhook.
-12. The downstream consumer calls the opaque `recordings-callback` Function URL. A success callback uses `SendTaskSuccess`; a failure callback uses `SendTaskFailure`. The workflow waits for at most 45-60 minutes (3600 seconds by default) and fails through a controlled downstream timeout/failure state if no valid callback arrives.
+12. The downstream consumer calls the opaque callback URL on `recordings.alf-broadcast.co.uk`. Cloudflare validates the route/body, SigV4-signs the origin request, and invokes the IAM-protected `recordings-callback` Function URL. A success callback uses `SendTaskSuccess`; a failure callback uses `SendTaskFailure`.
 
-The pipeline deliberately keeps raw Gemini word annotations out of Step Functions so the 256 KiB state limit is not consumed by timestamp/diarization metadata. External delivery happens only after the HTML result exists, so webhook/callback failures do not cause the transcription stages to be rerun inside the same execution path.
+The pipeline deliberately keeps raw Gemini word annotations out of Step Functions so the 256 KiB state limit is not consumed by timestamp/diarization metadata. External delivery happens only after the HTML result exists, so webhook/callback failures do not cause transcription stages to be rerun inside the same execution path.
 
 ## Upload API
 
 ```http
-POST <UploadFunctionUrl>/upload-url
+POST https://recordings.alf-broadcast.co.uk/upload-url
 x-recordings-auth: <shared secret>
 content-type: application/json
 
@@ -53,7 +53,7 @@ The initial consumer is IFTTT event `newrecording`, but the AWS workflow intenti
     "key": "results/<recording-id>.html"
   },
   "callback": {
-    "url": "<opaque callback URL>",
+    "url": "https://recordings.alf-broadcast.co.uk/recordings/callback/<opaque-callback-id>",
     "expiresAt": "<ISO-8601 timestamp>"
   }
 }
@@ -65,10 +65,10 @@ The pre-signed URLs and callback URL are intentionally provided to the downstrea
 
 ## Callback API
 
-The callback Function URL accepts only:
+The public callback endpoint accepts only:
 
 ```http
-POST <CallbackFunctionUrl>/recordings/callback/<opaque-callback-id>
+POST https://recordings.alf-broadcast.co.uk/recordings/callback/<opaque-callback-id>
 content-type: application/json
 ```
 
@@ -84,7 +84,7 @@ Success example:
 }
 ```
 
-Generic failure example for consumers that can report failures:
+Generic failure example:
 
 ```json
 {
@@ -94,7 +94,9 @@ Generic failure example for consumers that can report failures:
 }
 ```
 
-Only `status` is required; when `recordingId` is supplied it must match the callback record. Callback IDs are 256-bit random values and act as bearer correlation secrets. DynamoDB conditional updates ensure the first terminal callback wins. Repeated callbacks after success/failure are acknowledged as duplicates without invoking Step Functions again. Unknown callbacks return 404 and expired callbacks return 410. The task token is removed from the table after terminal completion.
+Only `status` is required; when `recordingId` is supplied it must match the callback record. Callback IDs are 256-bit random bearer capabilities. Cloudflare rejects malformed callback paths, invalid JSON and unsupported status values before AWS invocation, then signs valid-looking requests with AWS SigV4. The underlying `recordings-callback` Function URL uses `AWS_IAM` and is not anonymously invokable.
+
+The Lambda/DynamoDB layer remains authoritative. Unknown callbacks return 404, expired callbacks return 410, and conditional updates ensure the first terminal callback wins. Repeated callbacks after success/failure are acknowledged as duplicates without invoking Step Functions again. The task token is removed from the table after terminal completion.
 
 IFTTT currently has no reliable failure branch for later OneDrive/OneNote action failures. Its final action should therefore call the success callback only after those actions have run. If it never reaches that action, the Step Functions callback wait times out instead of marking the workflow complete.
 
@@ -105,7 +107,7 @@ Slack is operator observability only. There are two stages:
 - **started** — emitted before FFmpeg/Gemini work begins and contains only filename/recording ID metadata;
 - **ready** — emitted after the signed URLs exist and contains labelled Audio/Transcript links plus the 30-minute expiry notice.
 
-Slack network errors, HTTP 429 and HTTP 5xx receive a small bounded retry. Permanent HTTP 4xx responses are not repeatedly retried. All Slack failures are non-fatal to the recording workflow. Webhook secrets are never logged; the ready message is the intentional exception where the temporary signed artifact URLs are sent to Slack.
+Slack network errors, HTTP 429 and HTTP 5xx receive a small bounded retry. Permanent HTTP 4xx responses are not repeatedly retried. All Slack failures are non-fatal to the recording workflow. Webhook secrets are never logged; the ready message is the intentional exception where temporary signed artifact URLs are sent to Slack.
 
 ## Configuration
 
@@ -121,25 +123,15 @@ Deployment requires these values to be supplied outside source control:
 - `PIPELINE_ENABLED` — optional; defaults to `true` in `deploy.sh`.
 - `AWS_REGION` — optional; defaults to `eu-west-2`.
 
-For the protected production GitHub environment, source control contains only secret *names*, never secret values or Bitwarden UUIDs. Configure:
+For the protected production GitHub environment, source control contains only secret names, never secret values or Bitwarden UUIDs. The ingress deployment also resolves both Lambda Function URLs from AWS and deploys them to the Cloudflare Worker as non-secret runtime configuration. The Worker AWS access key is stored only as Cloudflare secrets.
 
-- `BWS_GITHUB_ACTIONS_RECORDINGS_APP` — recordings-scoped Bitwarden machine-account access token;
-- `BW_RECORDINGS_SHARED_SECRET` — Bitwarden reference for the shared secret;
-- `BW_GEMINI_API_KEY` — Bitwarden reference for the Gemini key;
-- `BW_RECORDINGS_DELIVERY_WEBHOOK` — Bitwarden reference for the downstream webhook URL;
-- `BW_RECORDINGS_SLACK_WEBHOOK` — Bitwarden reference for the Slack webhook URL when Slack is enabled.
+`recordings-callback` has only DynamoDB callback lookup/update plus `states:SendTaskSuccess`/`states:SendTaskFailure`; it cannot read S3 objects or access outbound webhook secrets. Possession of an unexpired opaque callback capability is required to complete a wait, and possession of the raw Lambda Function URL is insufficient because the origin requires AWS IAM authentication.
 
-The deployment workflow resolves these with `bitwarden/sm-action@v3.0.1`. `SlackWebhook` and `DeliveryWebhook` are `NoEcho` CloudFormation parameters. Protected configuration validation fails before AWS deployment when the downstream webhook is missing or when Slack is enabled but `BW_RECORDINGS_SLACK_WEBHOOK` is absent.
-
-The `recordings-callback` Function URL is intentionally unauthenticated at the HTTP layer because IFTTT must call it without AWS credentials. Its only authority is DynamoDB callback lookup/update plus `states:SendTaskSuccess`/`states:SendTaskFailure`; it cannot read S3 objects or access outbound webhook secrets. Possession of an unexpired opaque callback URL is required to complete a wait.
-
-The Lambda Node.js 22 runtime supplies the AWS SDK v3 clients used dynamically by the callback/delivery functions for DynamoDB and Step Functions. S3/presigning dependencies remain pinned in this package for the existing pipeline and local tests.
+See `SECURITY.md` for trust boundaries, callback replay/expiry semantics, verification and rollback procedures.
 
 ## Rollout safety
 
 The SAM template itself defaults `PipelineEnabled` to `false`. During a first deployment into a new environment, keep the EventBridge rule disabled until Gemini, Slack, downstream webhook and callback configuration are confirmed.
-
-Because `infrastructure/github-actions-deploy-role.yaml` is itself the policy that grants GitHub Actions permission to create the new delivery/callback resources, update that bootstrap stack before executing the first pipeline deployment containing this feature. After the role policy is updated, run the production workflow in `plan` mode first and inspect the change set before choosing `deploy`.
 
 ## Retention and privacy
 

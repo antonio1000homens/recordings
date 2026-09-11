@@ -87,12 +87,15 @@ jobs:
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 
-      - name: Resolve upload Function URL
-        id: origin
+      - name: Resolve Function URL origins
+        id: origins
         run: |
-          url="$(aws lambda get-function-url-config --function-name recordings-upload --region "${AWS_REGION}" --query FunctionUrl --output text)"
-          test -n "${url}" && test "${url}" != "None" || { echo 'recordings-upload Function URL not found.' >&2; exit 1; }
-          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+          upload_url="$(aws lambda get-function-url-config --function-name recordings-upload --region "${AWS_REGION}" --query FunctionUrl --output text)"
+          callback_url="$(aws lambda get-function-url-config --function-name recordings-callback --region "${AWS_REGION}" --query FunctionUrl --output text)"
+          test -n "${upload_url}" && test "${upload_url}" != "None" || { echo 'recordings-upload Function URL not found.' >&2; exit 1; }
+          test -n "${callback_url}" && test "${callback_url}" != "None" || { echo 'recordings-callback Function URL not found.' >&2; exit 1; }
+          echo "upload_url=${upload_url}" >> "${GITHUB_OUTPUT}"
+          echo "callback_url=${callback_url}" >> "${GITHUB_OUTPUT}"
 
       - uses: actions/setup-node@v4
         with:
@@ -108,7 +111,8 @@ jobs:
 
       - name: Sync Worker secrets and deploy
         env:
-          UPLOAD_ORIGIN_URL: ${{ steps.origin.outputs.url }}
+          UPLOAD_ORIGIN_URL: ${{ steps.origins.outputs.upload_url }}
+          CALLBACK_ORIGIN_URL: ${{ steps.origins.outputs.callback_url }}
         run: bash cloudflare/recordings-ingress/deploy-ci.sh
 
       - name: Summarise ingress deployment
@@ -116,5 +120,5 @@ jobs:
           echo '### Recordings ingress deployed' >> "${GITHUB_STEP_SUMMARY}"
           echo '- Worker: `recordings-ingress`' >> "${GITHUB_STEP_SUMMARY}"
           echo '- IAM stack: `recordings-worker-invoker`' >> "${GITHUB_STEP_SUMMARY}"
-          echo '- Upload origin resolved from AWS at deployment time.' >> "${GITHUB_STEP_SUMMARY}"
-          echo '- Production Lambda Function URL auth is not changed by this workflow.' >> "${GITHUB_STEP_SUMMARY}"
+          echo '- Upload and callback origins resolved from AWS at deployment time.' >> "${GITHUB_STEP_SUMMARY}"
+          echo '- Function URL auth modes are managed by the pipeline deployment.' >> "${GITHUB_STEP_SUMMARY}"
