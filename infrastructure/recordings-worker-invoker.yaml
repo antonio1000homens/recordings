@@ -5,6 +5,9 @@ Parameters:
   UploadFunctionName:
     Type: String
     Default: recordings-upload
+  CallbackFunctionName:
+    Type: String
+    Default: recordings-callback
   WorkerInvokerUserName:
     Type: String
     Default: recordings-worker-invoker
@@ -15,21 +18,25 @@ Resources:
     Properties:
       UserName: !Ref WorkerInvokerUserName
       Policies:
-        - PolicyName: InvokeRecordingsUploadFunctionUrlOnly
+        - PolicyName: InvokeRecordingsFunctionUrlsOnly
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: InvokeUploadFunctionUrl
+              - Sid: InvokeFunctionUrls
                 Effect: Allow
                 Action: lambda:InvokeFunctionUrl
-                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${UploadFunctionName}
+                Resource:
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${UploadFunctionName}
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${CallbackFunctionName}
                 Condition:
                   StringEquals:
                     lambda:FunctionUrlAuthType: AWS_IAM
-              - Sid: InvokeUploadFunctionViaUrl
+              - Sid: InvokeFunctionsViaUrl
                 Effect: Allow
                 Action: lambda:InvokeFunction
-                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${UploadFunctionName}
+                Resource:
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${UploadFunctionName}
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${CallbackFunctionName}
                 Condition:
                   Bool:
                     lambda:InvokedViaFunctionUrl: 'true'
