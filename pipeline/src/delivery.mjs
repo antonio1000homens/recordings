@@ -154,6 +154,19 @@ async function signedGetUrl(item) {
   );
 }
 
+async function objectText(item) {
+  const result = await s3.send(new GetObjectCommand({ Bucket: item.bucket, Key: item.key }));
+  if (result.Body?.transformToString) return result.Body.transformToString();
+  const chunks = [];
+  for await (const chunk of result.Body) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function callNameFromFilename(filename) {
+  const value = String(filename || '').trim();
+  return value.replace(/\\.[^.]+$/, '') || value || 'Recording';
+}
+
 async function getDynamoDb() {
   if (!ddbClient) {
     const module = await import('@aws-sdk/client-dynamodb');
@@ -210,6 +223,8 @@ export function buildDownstreamPayload(delivery, callback) {
     processedAt: delivery.processedAt,
     audio: delivery.audio,
     html: delivery.html,
+    callName: delivery.callName,
+    transcriptHtml: delivery.transcriptHtml,
     callback,
   };
 }
@@ -231,14 +246,20 @@ async function generateLinks(event) {
   const html = artifact(event.artifacts?.html, 'artifacts.html');
 
   await Promise.all([assertObjectExists(audio), assertObjectExists(html)]);
-  const [audioUrl, htmlUrl] = await Promise.all([signedGetUrl(audio), signedGetUrl(html)]);
+  const [audioUrl, htmlUrl, transcriptHtml] = await Promise.all([
+    signedGetUrl(audio),
+    signedGetUrl(html),
+    objectText(html),
+  ]);
 
   const delivery = {
     recordingId,
     filename: audio.filename,
+    callName: callNameFromFilename(audio.filename),
     processedAt: new Date().toISOString(),
     audio: { ...audio, url: audioUrl },
     html: { ...html, url: htmlUrl },
+    transcriptHtml,
   };
 
   console.info('Artifact links generated', {

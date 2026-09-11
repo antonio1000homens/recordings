@@ -132,12 +132,16 @@ test('downstream payload contains artifact metadata and opaque callback without 
     processedAt: '2026-09-10T18:00:00.000Z',
     audio: { filename: 'Call.m4a', bucket: 'b', key: 'inbox/r/Call.m4a', url: 'https://signed/audio' },
     html: { filename: 'r.html', bucket: 'b', key: 'results/r.html', url: 'https://signed/html' },
+    callName: 'Call',
+    transcriptHtml: '<h2>Transcript</h2><p><b>Speaker 0:</b> Hello</p>',
   }, {
     url: `https://callback.example/recordings/callback/${'a'.repeat(64)}`,
     expiresAt: '2026-09-10T19:00:00.000Z',
   });
   assert.equal(payload.audio.url, 'https://signed/audio');
   assert.equal(payload.html.url, 'https://signed/html');
+  assert.equal(payload.callName, 'Call');
+  assert.equal(payload.transcriptHtml, '<h2>Transcript</h2><p><b>Speaker 0:</b> Hello</p>');
   assert.match(payload.callback.url, /[a-f0-9]{64}$/);
   assert.doesNotMatch(JSON.stringify(payload), /secret-task-token|taskToken/);
 });
