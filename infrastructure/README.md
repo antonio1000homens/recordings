@@ -12,7 +12,7 @@ Run the bootstrap from a trusted local/admin AWS identity, supplying the existin
 
 ```bash
 AWS_REGION=eu-west-2 \
-CODE_BUCKET='aws2022-lambda-code' \
+CODE_BUCKET='<existing-sam-code-bucket>' \
 bash infrastructure/bootstrap-deployment-role.sh
 ```
 
@@ -48,7 +48,7 @@ Create an environment named `production` and restrict **Deployment branches and 
 Add these environment secrets:
 
 - `AWS_ROLE_TO_ASSUME` — output ARN from the bootstrap stack.
-- `CODE_BUCKET` — existing private SAM deployment bucket name (`aws2022-lambda-code`).
+- `CODE_BUCKET` — existing private SAM deployment bucket name.
 - `BWS_GITHUB_ACTIONS_RECORDINGS_APP` — access token for a Bitwarden Secrets Manager machine account scoped only to the recordings project.
 - `BW_RECORDINGS_SHARED_SECRET` — Bitwarden secret UUID for the recordings HTTP shared secret.
 - `BW_GEMINI_API_KEY` — Bitwarden secret UUID for the recordings Gemini API key.
