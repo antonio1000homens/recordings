@@ -1,0 +1,36 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Least-privilege IAM principal used by the Cloudflare recordings ingress Worker
+
+Parameters:
+  UploadFunctionName:
+    Type: String
+    Default: recordings-upload
+
+Resources:
+  RecordingsWorkerInvoker:
+    Type: AWS::IAM::User
+    Properties:
+      Policies:
+        - PolicyName: InvokeRecordingsUploadFunctionUrlOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeUploadFunctionUrl
+                Effect: Allow
+                Action: lambda:InvokeFunctionUrl
+                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${UploadFunctionName}
+                Condition:
+                  StringEquals:
+                    lambda:FunctionUrlAuthType: AWS_IAM
+              - Sid: InvokeUploadFunctionViaUrl
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${UploadFunctionName}
+                Condition:
+                  Bool:
+                    lambda:InvokedViaFunctionUrl: 'true'
+
+Outputs:
+  WorkerInvokerUserName:
+    Value: !Ref RecordingsWorkerInvoker
+    Description: Create/rotate an access key for this principal out-of-band and store it only as Cloudflare Worker secrets.
