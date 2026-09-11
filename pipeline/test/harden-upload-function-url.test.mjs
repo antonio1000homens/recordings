@@ -8,27 +8,29 @@ import test from 'node:test';
 const script = new URL('../scripts/harden-upload-function-url.mjs', import.meta.url);
 
 function runTransform(source) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recordings-upload-hardening-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recordings-function-url-hardening-'));
   const file = path.join(dir, 'template.yaml');
   fs.writeFileSync(file, source);
   execFileSync(process.execPath, [script.pathname, file]);
   return fs.readFileSync(file, 'utf8');
 }
 
-test('hardens only upload Function URL and removes public upload permissions', () => {
-  const input = `Resources:\n  UploadFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      FunctionUrlConfig:\n        AuthType: NONE\n        InvokeMode: BUFFERED\n\n  UploadUrlPermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunctionUrl\n      FunctionUrlAuthType: NONE\n\n  UploadInvokePermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunction\n      InvokedViaFunctionUrl: true\n\n  MediaFunction:\n    Type: AWS::Serverless::Function\n\n  CallbackFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      FunctionUrlConfig:\n        AuthType: NONE\n`;
+function templateFixture() {
+  return `Resources:\n  UploadFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      FunctionUrlConfig:\n        AuthType: NONE\n        InvokeMode: BUFFERED\n\n  UploadUrlPermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunctionUrl\n      FunctionUrlAuthType: NONE\n\n  UploadInvokePermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunction\n      InvokedViaFunctionUrl: true\n\n  MediaFunction:\n    Type: AWS::Serverless::Function\n\n  CallbackFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      FunctionUrlConfig:\n        AuthType: NONE\n\n  CallbackUrlPermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunctionUrl\n      FunctionUrlAuthType: NONE\n\n  CallbackInvokePermission:\n    Type: AWS::Lambda::Permission\n    Properties:\n      Principal: '*'\n      Action: lambda:InvokeFunction\n      InvokedViaFunctionUrl: true\n\n  DeliveryFunction:\n    Type: AWS::Serverless::Function\n    Properties:\n      Environment:\n        Variables:\n          CALLBACK_BASE_URL: !GetAtt CallbackFunctionUrl.FunctionUrl\n`;
+}
 
-  const output = runTransform(input);
+test('hardens upload and callback Function URLs and removes public permissions', () => {
+  const output = runTransform(templateFixture());
   assert.match(output, /UploadFunction:[\s\S]*AuthType: AWS_IAM/);
+  assert.match(output, /CallbackFunction:[\s\S]*AuthType: AWS_IAM/);
   assert.doesNotMatch(output, /UploadUrlPermission:/);
   assert.doesNotMatch(output, /UploadInvokePermission:/);
-  assert.match(output, /CallbackFunction:[\s\S]*AuthType: NONE/);
+  assert.doesNotMatch(output, /CallbackUrlPermission:/);
+  assert.doesNotMatch(output, /CallbackInvokePermission:/);
+  assert.match(output, /CALLBACK_BASE_URL: https:\/\/recordings\.alf-broadcast\.co\.uk\//);
 });
 
-test('fails closed when the expected upload permission resources are missing', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recordings-upload-hardening-'));
-  const file = path.join(dir, 'template.yaml');
-  fs.writeFileSync(file, `Resources:\n  UploadFunction:\n    Properties:\n      FunctionUrlConfig:\n        AuthType: NONE\n\n  MediaFunction:\n    Type: AWS::Serverless::Function\n`);
-
-  assert.throws(() => execFileSync(process.execPath, [script.pathname, file], { stdio: 'pipe' }));
+test('fails closed when expected public callback permissions are missing', () => {
+  const input = templateFixture().replace(/\n  CallbackUrlPermission:[\s\S]*?(?=\n  CallbackInvokePermission:)/, '');
+  assert.throws(() => runTransform(input));
 });
