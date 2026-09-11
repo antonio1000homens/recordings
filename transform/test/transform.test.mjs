@@ -56,6 +56,29 @@ test('enrichment prompt instructs Gemini to label Antonio as Me', () => {
   assert.match(prompt, /use Me rather than Antonio or a surname/);
 });
 
+test('enrichment prompt asks Gemini to reconstruct labels when speaker tags are missing', () => {
+  const result = prepareEnrichment({ body: { output_text: 'Hello Antonio. Hi Sarah.' } });
+  const prompt = result.gemini_request.contents[0].parts[0].text;
+  assert.match(prompt, /transcript has lost its speaker-turn labels/i);
+  assert.match(prompt, /labelled_transcript_html/);
+  assert.match(prompt, /Preserve every word and its order as faithfully as possible/);
+  assert.ok(result.gemini_request.generationConfig.response_schema.required.includes('labelled_transcript_html'));
+});
+
+test('enrichment prompt keeps deterministic rename path when speaker tags exist', () => {
+  const result = prepareEnrichment({
+    body: {
+      steps: [{ content: [{ annotations: [
+        { type: 'word_info', text: 'Hello', speaker: 'spk:0' },
+        { type: 'word_info', text: 'Hi', speaker: 'spk:1' },
+      ] }] }],
+    },
+  });
+  const prompt = result.gemini_request.contents[0].parts[0].text;
+  assert.match(prompt, /already contains usable Speaker N labels/);
+  assert.match(prompt, /Set labelled_transcript_html to an empty string/);
+});
+
 test('finalize enrichment renames speakers and emits summary', () => {
   const gemini = {
     body: {
@@ -63,12 +86,46 @@ test('finalize enrichment renames speakers and emits summary', () => {
         speaker_0_label: 'Alex',
         speaker_1_label: 'Taylor',
         summary_points: ['Appointment confirmed'],
+        labelled_transcript_html: '',
       }) }] } }],
     },
   };
   const result = finalizeEnrichment('<p><b>Speaker 0:</b> Hello</p><p><b>Speaker 1:</b> Hi</p>', gemini);
   assert.match(result.formatted_html, /<b>Alex:<\/b>/);
   assert.match(result.formatted_html, /Appointment confirmed/);
+});
+
+test('finalize enrichment uses reconstructed speaker turns when original labels are missing', () => {
+  const gemini = {
+    body: {
+      candidates: [{ content: { parts: [{ text: JSON.stringify({
+        speaker_0_label: 'Me',
+        speaker_1_label: 'Sarah',
+        summary_points: ['Me spoke with Sarah'],
+        labelled_transcript_html: '<p><b>Speaker 0:</b> Hello Sarah.</p><p><b>Speaker 1:</b> Hi Antonio.</p>',
+      }) }] } }],
+    },
+  };
+  const result = finalizeEnrichment('<p>Hello Sarah. Hi Antonio.</p>', gemini);
+  assert.equal(result.transcript_html, '<p><b>Me:</b> Hello Sarah.</p><p><b>Sarah:</b> Hi Antonio.</p>');
+  assert.match(result.formatted_html, /<b>Me:<\/b>/);
+  assert.match(result.formatted_html, /<b>Sarah:<\/b>/);
+});
+
+test('finalize enrichment ignores reconstructed transcript when original speaker tags exist', () => {
+  const gemini = {
+    body: {
+      candidates: [{ content: { parts: [{ text: JSON.stringify({
+        speaker_0_label: 'Me',
+        speaker_1_label: 'Sarah',
+        summary_points: [],
+        labelled_transcript_html: '<p><b>Speaker 0:</b> altered text</p>',
+      }) }] } }],
+    },
+  };
+  const result = finalizeEnrichment('<p><b>Speaker 0:</b> original text</p>', gemini);
+  assert.equal(result.transcript_html, '<p><b>Me:</b> original text</p>');
+  assert.doesNotMatch(result.transcript_html, /altered text/);
 });
 
 test('chunk exports are sorted and annotated', () => {

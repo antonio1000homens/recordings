@@ -151,9 +151,17 @@ export function transcriptHtml(transcriptionResponse) {
     : '<p><b>Transcript unavailable:</b> Gemini returned no transcript text or speaker annotations.</p>';
 }
 
+function hasSpeakerLabels(transcript) {
+  return /<b>Speaker\s+\d+\s*:<\/b>/i.test(String(transcript || ''));
+}
+
 export function summaryRequest(transcript) {
   const text = String(transcript || '');
-  const prompt = `Analyse the diarized conversation below. The transcript uses labels such as Speaker 0 and Speaker 1.\n\nTasks:\n1. Identify each speaker from evidence in the conversation, especially introductions and the opening exchanges. Prefer a real first name when clearly supported by the transcript. Never invent a name.\n2. One participant is always the owner of this recording, Antonio. If a speaker is clearly identified as Antonio, António, Antonio Ferreira, António Ferreira, or an obvious equivalent/mis-transcription of that same name, set that speaker's label to exactly Me. Do not expose Antonio's surname in the label. Do not label any other participant as Me unless the conversation clearly identifies them as Antonio.\n3. For every other speaker, if a real name is not available but the role is clear, use a useful identifier such as Remote. If neither is clear, keep Speaker 0 or Speaker 1.\n4. Return 3 to 8 concise summary points capturing the important facts, decisions, questions, actions, commitments and follow-ups. When referring to Antonio/the recording owner in the summary, use Me rather than Antonio or a surname.\n5. Do not rewrite or paraphrase the transcript. Only return speaker labels and summary points; a later deterministic step will rename the transcript.\n\nTranscript:\n${text}`;
+  const labelled = hasSpeakerLabels(text);
+  const fallbackInstruction = labelled
+    ? 'The transcript already contains usable Speaker N labels. Set labelled_transcript_html to an empty string; a later deterministic step will rename those existing labels.'
+    : 'The transcript has lost its speaker-turn labels. Reconstruct the speaker turns from the conversation and return labelled_transcript_html as HTML paragraphs exactly in the form <p><b>Speaker N:</b> text</p>. Preserve every word and its order as faithfully as possible: do not summarise, paraphrase, omit, correct, or add dialogue. Use Speaker 0, Speaker 1, etc. in this field; do not replace those labels with names yet.';
+  const prompt = `Analyse the diarized conversation below. The transcript may use labels such as Speaker 0 and Speaker 1, but in some responses those labels may be missing.\n\nTasks:\n1. Identify each speaker from evidence in the conversation, especially introductions and the opening exchanges. Prefer a real first name when clearly supported by the transcript. Never invent a name.\n2. One participant is always the owner of this recording, Antonio. If a speaker is clearly identified as Antonio, António, Antonio Ferreira, António Ferreira, or an obvious equivalent/mis-transcription of that same name, set that speaker's label to exactly Me. Do not expose Antonio's surname in the label. Do not label any other participant as Me unless the conversation clearly identifies them as Antonio.\n3. For every other speaker, if a real name is not available but the role is clear, use a useful identifier such as Remote. If neither is clear, keep Speaker 0 or Speaker 1.\n4. Return 3 to 8 concise summary points capturing the important facts, decisions, questions, actions, commitments and follow-ups. When referring to Antonio/the recording owner in the summary, use Me rather than Antonio or a surname.\n5. ${fallbackInstruction}\n6. Apart from the explicit speaker-turn reconstruction fallback in task 5, do not rewrite or paraphrase the transcript.\n\nTranscript:\n${text}`;
   return {
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: {
@@ -166,8 +174,9 @@ export function summaryRequest(transcript) {
           speaker_0_reason: { type: 'STRING' },
           speaker_1_reason: { type: 'STRING' },
           summary_points: { type: 'ARRAY', items: { type: 'STRING' } },
+          labelled_transcript_html: { type: 'STRING' },
         },
-        required: ['speaker_0_label', 'speaker_1_label', 'summary_points'],
+        required: ['speaker_0_label', 'speaker_1_label', 'summary_points', 'labelled_transcript_html'],
       },
     },
   };
@@ -193,7 +202,11 @@ export function finalizeEnrichment(transcript, geminiResponse) {
   const result = extractModelJson(geminiResponse);
   const speaker0 = String(result.speaker_0_label || 'Speaker 0').trim() || 'Speaker 0';
   const speaker1 = String(result.speaker_1_label || 'Speaker 1').trim() || 'Speaker 1';
-  const renamed = transcriptHtmlValue
+  const reconstructedTranscript = !hasSpeakerLabels(transcriptHtmlValue)
+    ? String(result.labelled_transcript_html || '').trim()
+    : '';
+  const transcriptToRename = reconstructedTranscript || transcriptHtmlValue;
+  const renamed = transcriptToRename
     .replace(/Speaker\s*0(?=:)/gi, escapeHtml(speaker0))
     .replace(/Speaker\s*1(?=:)/gi, escapeHtml(speaker1));
   const points = Array.isArray(result.summary_points) ? result.summary_points.filter(Boolean) : [];
