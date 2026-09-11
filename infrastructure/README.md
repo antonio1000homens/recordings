@@ -1,14 +1,14 @@
 # Deployment bootstrap
 
-The production recordings stacks are intentionally not deployed automatically from this public repository yet.
+Production deployment is CI-gated from this public repository. A successful `CI` run caused by a same-repository `push` to `master` automatically deploys the exact tested revision through the protected `production` environment.
 
-The first cutover uses a dedicated GitHub Actions OIDC role and a dedicated Bitwarden Secrets Manager machine account/project. The existing private monorepo remains the deployment owner until the new path has been proven.
+The deployment path uses a dedicated GitHub Actions OIDC role and a dedicated Bitwarden Secrets Manager machine account/project.
 
 ## 1. Bootstrap the AWS OIDC deployment role
 
 The AWS account already needs the GitHub Actions OIDC provider for `token.actions.githubusercontent.com`.
 
-Run the bootstrap from a trusted local/admin AWS identity, supplying the existing private SAM deployment bucket used by the current recordings deployment:
+Run the bootstrap from a trusted local/admin AWS identity, supplying the existing private SAM deployment bucket used by the recordings deployment:
 
 ```bash
 AWS_REGION=eu-west-2 \
@@ -24,16 +24,22 @@ This repository was created after GitHub enabled immutable OIDC subjects for new
 repo:antonio1000homens@36929120/recordings@1364314008:environment:production
 ```
 
-The workflow independently refuses to run unless `github.ref` is exactly `refs/heads/master`.
+Automatic deployment is additionally constrained in the workflow itself. It accepts only a completed `CI` workflow where:
 
-The role policy is restricted to the existing recordings stacks, Lambda functions, runtime roles, log groups, recordings bucket, Step Functions state machine, EventBridge rule and only these SAM deployment artifact prefixes:
+- the triggering CI conclusion is `success`;
+- the CI event was `push`, not `pull_request`;
+- the head branch is `master`;
+- the head repository is this repository, not a fork;
+- the tested SHA is still the current `master` when deployment begins.
+
+The deployment checks out that exact tested SHA. A stale CI rerun for an older `master` revision is refused rather than rolling production backwards.
+
+The role policy is restricted to the recordings stacks, Lambda functions, runtime roles, log groups, recordings bucket, DynamoDB callback table, Step Functions state machine, EventBridge rule and only these SAM deployment artifact prefixes:
 
 ```text
 recordings/pipeline/*
 recordings/transform/*
 ```
-
-The old top-level SAM artifact prefixes may remain in the code bucket as historical deployment objects; the recordings-only role does not require access to them.
 
 ## 2. GitHub `production` environment
 
@@ -46,12 +52,18 @@ Add these environment secrets:
 - `BWS_GITHUB_ACTIONS_RECORDINGS_APP` — access token for a Bitwarden Secrets Manager machine account scoped only to the recordings project.
 - `BW_RECORDINGS_SHARED_SECRET` — Bitwarden secret UUID for the recordings HTTP shared secret.
 - `BW_GEMINI_API_KEY` — Bitwarden secret UUID for the recordings Gemini API key.
+- `BW_RECORDINGS_DELIVERY_WEBHOOK` — Bitwarden secret UUID for the downstream recording-delivery webhook.
+- `BW_RECORDINGS_SLACK_WEBHOOK` — Bitwarden secret UUID for the Slack incoming webhook when Slack notifications are enabled.
 
-Add this environment variable:
+Optional environment variables:
 
-- `AWS_REGION` — optional; defaults to `eu-west-2`.
+- `AWS_REGION` — defaults to `eu-west-2`.
+- `SLACK_NOTIFICATIONS_ENABLED` — defaults to `true`.
+- `CALLBACK_TIMEOUT_SECONDS` — defaults to `3600`.
 
 The Bitwarden UUIDs are identifiers rather than secret values, but they are stored as GitHub environment secrets so they are masked in public Actions logs.
+
+If the `production` environment has **required reviewers**, automatic deployment will pause for GitHub approval. For completely unattended CI-to-production deployment, do not configure a required-reviewer protection rule. Branch/tag restrictions and the workflow's same-repository successful-push checks remain in force.
 
 ## 3. Bitwarden structure
 
@@ -61,22 +73,45 @@ Recommended Bitwarden Secrets Manager layout:
 Project: recordings
   RECORDINGS_TRANSFORM_SHARED_SECRET
   GEMINI_API_KEY
+  RECORDINGS_DELIVERY_WEBHOOK
+  RECORDINGS_SLACK_WEBHOOK
 
 Machine account: github-actions-recordings
   Read access: recordings project only
 ```
 
-The machine account must have **Can read** access to the `recordings` project, and the two GitHub `BW_*` environment secrets must contain the UUIDs of the individual secrets above, not the project UUID. Bitwarden returns `404 Resource not found` when the authenticated machine account cannot access a requested secret UUID.
+The machine account must have **Can read** access to the `recordings` project, and the GitHub `BW_*` environment secrets must contain the UUIDs of the individual secrets above, not the project UUID. Bitwarden returns `404 Resource not found` when the authenticated machine account cannot access a requested secret UUID.
 
-During migration, create recordings-project secret entries without deleting/moving the entries still used by the private monorepo. This allows both deployment paths to coexist until cutover is verified.
+Prefer a Gemini API key dedicated to recordings. If an existing key must be reused, copy its value into a recordings-project secret entry rather than granting the recordings machine account access to an unrelated project.
 
-Prefer a Gemini API key dedicated to recordings. If the existing key must be reused initially, copy its value into a recordings-project secret entry rather than granting the new machine account access to an unrelated project.
+## 4. Automatic deployment
 
-## 4. Plan before deploying
+`.github/workflows/deploy.yml` listens for completion of the `CI` workflow. A successful `push` CI run on current `master` starts production deployment automatically with the safe production defaults:
 
-`.github/workflows/deploy.yml` is deliberately `workflow_dispatch` only and refuses to run unless the selected ref is `master`.
+```text
+operation: deploy
+pipeline_enabled: true
+confirm_stack_recreate: false
+```
 
-For the first cutover, always run **Deploy Recordings** with:
+The automatic path does **not** rerun the full Node/SAM test suite. CI is the test gate. Deployment still:
+
+1. re-runs the cheap public-source safety check before credentials are loaded;
+2. installs deterministic package dependencies with `npm ci`;
+3. builds both SAM applications from the tested revision;
+4. validates protected configuration exists;
+5. resolves runtime secrets through the recordings-scoped Bitwarden machine account;
+6. assumes the recordings-only AWS OIDC role;
+7. deploys `transform`, then `pipeline`;
+8. verifies both CloudFormation stacks and the Step Functions state machine are describable.
+
+The production concurrency group is serialized with `cancel-in-progress: false`, so an in-progress deployment is not cancelled part-way through by a later merge.
+
+## 5. Manual plan and emergency deployment
+
+The **Deploy Recordings** `workflow_dispatch` entry remains available on `master`.
+
+For a non-executing CloudFormation plan, run:
 
 ```text
 operation: plan
@@ -86,17 +121,9 @@ confirm_disable_pipeline: false
 confirm_stack_recreate: false
 ```
 
-Plan mode uses the same built templates, secrets, stack names, SAM code bucket and artifact prefixes as a real deployment, but passes `--no-execute-changeset` to SAM. CloudFormation creates change sets for inspection and does not update stack resources.
+Plan mode passes `--no-execute-changeset` to SAM. CloudFormation creates change sets for inspection and does not update resources.
 
-Plan mode refuses to delete/recreate a stack if an existing stack is in an unrecoverable state. A real deployment also refuses to delete/recreate an unhealthy stack unless the operator explicitly sets `confirm_stack_recreate=true` after investigating the failure. This emergency recovery flag defaults to false and should not be used during a normal repository migration.
-
-If `pipeline_enabled=false` is intentionally selected, `confirm_disable_pipeline=true` is also required. This prevents an accidental workflow selection from disabling the EventBridge ingestion path.
-
-Inspect the generated change-set tables in the workflow log. Pay particular attention to any `Remove`, unexpected `Add`, or replacement of stateful resources such as the recordings S3 bucket, Lambda functions, Step Functions state machine or EventBridge rule.
-
-## 5. First deployment
-
-Only after the plan has been reviewed and accepted, manually run **Deploy Recordings** again from `master` with:
+For an intentional manual production deployment, run:
 
 ```text
 operation: deploy
@@ -106,14 +133,12 @@ confirm_disable_pipeline: false
 confirm_stack_recreate: false
 ```
 
-The workflow deploys transform first, then pipeline, and verifies that both CloudFormation stacks and the Step Functions state machine are describable afterwards.
+Manual runs retain the full tests, syntax checks and SAM validation/build sequence before production credentials are loaded.
 
-Leave the private monorepo deployment in place during this first public-repository deployment. Then run one direct recording and one chunked recording through the existing endpoint and verify final HTML/result generation.
-
-Only after those checks pass should the private monorepo workflows/source be removed.
+If `pipeline_enabled=false` is intentionally selected, `confirm_disable_pipeline=true` is also required. Stack recreation remains an emergency-only opt-in via `confirm_stack_recreate=true`.
 
 ## Rollback
 
-Do not delete the existing recordings CloudFormation stacks during repository migration.
+Do not delete the existing recordings CloudFormation stacks to roll back application code. Revert the offending commit on `master`; after the revert passes CI, the automatic deployment path will deploy the reverted tested revision.
 
-If the new deployment path fails, stop using the public-repo deployment workflow and continue deploying from the private monorepo while the problem is corrected. Because stack names and resource names are preserved, repository migration should not itself require an AWS data migration.
+If the deployment mechanism itself is broken, use the manual workflow only after correcting the deployment path or deploy from a trusted local/admin environment using the same templates and stack names.
