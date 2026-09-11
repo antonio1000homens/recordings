@@ -11,7 +11,7 @@
     "ffmpeg-static": "5.3.0"
   },
   "scripts": {
-    "check": "node --check src/upload.mjs && node --check src/media.mjs && node --check src/ai.mjs && node --check src/media-core.mjs && node --check src/delivery.mjs && node --check src/callback.mjs",
+    "check": "node --check src/upload.mjs && node --check src/media.mjs && node --check src/ai.mjs && node --check src/media-core.mjs && node --check src/delivery.mjs && node --check src/callback.mjs && node --check scripts/harden-upload-function-url.mjs",
     "test": "node --test"
   }
 }
