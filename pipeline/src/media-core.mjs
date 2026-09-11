@@ -8,7 +8,8 @@ export function safeFilename(value) {
 }
 
 function filenameStem(value) {
-  return safeFilename(value).replace(/\.[^.]+$/, '');
+  const text = String(value || 'recording.m4a').split(/[\\/]/).pop() || 'recording.m4a';
+  return text.replace(/\.[^.]+$/, '');
 }
 
 function validTimestampParts({ year, month, day, hour, minute, second }) {
