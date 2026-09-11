@@ -49,6 +49,38 @@ function hardenSection(source, {
   return before + section + after;
 }
 
+function replaceCallbackBaseUrl(source) {
+  const start = source.indexOf('\n  DeliveryFunction:\n');
+  const end = source.indexOf('\n  CallbackTable:\n');
+  if (start < 0 || end < 0 || end <= start) {
+    throw new Error('Could not locate DeliveryFunction/CallbackTable boundaries in SAM template');
+  }
+
+  const before = source.slice(0, start);
+  let section = source.slice(start, end);
+  const after = source.slice(end);
+
+  // SAM build may rewrite !GetAtt into long-form YAML. Treat the complete
+  // CALLBACK_BASE_URL property as the invariant instead of depending on one
+  // serialized representation, but only inside DeliveryFunction and only once.
+  const callbackBaseBlock = /^\s+CALLBACK_BASE_URL:\s*(?:.*\n(?:\s{12,}.*\n)*)?/m;
+  const matches = section.match(/^\s+CALLBACK_BASE_URL:/gm) || [];
+  if (matches.length !== 1 || !callbackBaseBlock.test(section)) {
+    throw new Error(`Expected exactly one DeliveryFunction CALLBACK_BASE_URL property, found ${matches.length}`);
+  }
+
+  section = section.replace(
+    callbackBaseBlock,
+    `          CALLBACK_BASE_URL: ${PUBLIC_CALLBACK_BASE_URL}\n`,
+  );
+
+  if (!section.includes(`CALLBACK_BASE_URL: ${PUBLIC_CALLBACK_BASE_URL}`)) {
+    throw new Error('Public Cloudflare callback base URL was not applied');
+  }
+
+  return before + section + after;
+}
+
 let hardened = hardenSection(original, {
   startLogicalId: 'UploadFunction',
   endLogicalId: 'MediaFunction',
@@ -63,17 +95,6 @@ hardened = hardenSection(hardened, {
   label: 'callback',
 });
 
-const callbackBasePattern = /^\s+CALLBACK_BASE_URL: !GetAtt CallbackFunctionUrl\.FunctionUrl$/m;
-if (!callbackBasePattern.test(hardened)) {
-  throw new Error('Expected DeliveryFunction CALLBACK_BASE_URL to reference CallbackFunctionUrl');
-}
-hardened = hardened.replace(
-  callbackBasePattern,
-  `          CALLBACK_BASE_URL: ${PUBLIC_CALLBACK_BASE_URL}`,
-);
-
-if (!hardened.includes(`CALLBACK_BASE_URL: ${PUBLIC_CALLBACK_BASE_URL}`)) {
-  throw new Error('Public Cloudflare callback base URL was not applied');
-}
+hardened = replaceCallbackBaseUrl(hardened);
 
 fs.writeFileSync(templatePath, hardened);
