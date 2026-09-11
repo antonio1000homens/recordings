@@ -27,9 +27,28 @@ jobs:
           use-installer: true
           token: ${{ github.token }}
       - name: Syntax-check deployment scripts
-        run: bash -n pipeline/deploy.sh transform/deploy.sh infrastructure/bootstrap-deployment-role.sh
+        run: bash -n pipeline/deploy.sh transform/deploy.sh infrastructure/bootstrap-deployment-role.sh cloudflare/recordings-ingress/deploy-ci.sh
       - name: Validate deployment role template
         run: sam validate --lint --template infrastructure/github-actions-deploy-role.yaml
+      - name: Validate Worker invoker template
+        run: sam validate --lint --template infrastructure/recordings-worker-invoker.yaml
+      - name: Validate ingress deployment bootstrap policy
+        run: sam validate --lint --template infrastructure/github-actions-ingress-deploy-policy.yaml
+
+  ingress:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare/recordings-ingress
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Test
+        run: npm test
 
   transform:
     runs-on: ubuntu-latest
