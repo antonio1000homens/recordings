@@ -1,0 +1,14 @@
+name = "recordings-ingress"
+main = "src/index.mjs"
+compatibility_date = "2026-09-11"
+
+# Set these as encrypted Worker secrets, never in this file:
+#   RECORDINGS_SHARED_SECRET
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+#
+# Non-secret configuration is intentionally explicit.
+[vars]
+AWS_REGION = "eu-west-2"
+# Set after the IAM-protected Lambda Function URL is deployed.
+UPLOAD_ORIGIN_URL = "REPLACE_WITH_IAM_PROTECTED_FUNCTION_URL"
