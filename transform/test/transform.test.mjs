@@ -47,6 +47,15 @@ test('prepare enrichment returns transcript and Gemini request', () => {
   assert.equal(result.gemini_request.contents[0].role, 'user');
 });
 
+test('enrichment prompt instructs Gemini to label Antonio as Me', () => {
+  const result = prepareEnrichment({ body: { output_text: 'Antonio Ferreira speaking' } });
+  const prompt = result.gemini_request.contents[0].parts[0].text;
+  assert.match(prompt, /One participant is always the owner of this recording, Antonio/);
+  assert.match(prompt, /Antonio Ferreira/);
+  assert.match(prompt, /set that speaker's label to exactly Me/);
+  assert.match(prompt, /use Me rather than Antonio or a surname/);
+});
+
 test('finalize enrichment renames speakers and emits summary', () => {
   const gemini = {
     body: {
