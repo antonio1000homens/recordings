@@ -1,6 +1,10 @@
 name: Deploy Recordings
 
 on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [master]
   workflow_dispatch:
     inputs:
       operation:
@@ -45,34 +49,67 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ github.ref == 'refs/heads/master' && (inputs.operation == 'plan' || (inputs.operation == 'deploy' && inputs.confirm_deploy == true)) }}
+    if: >-
+      ${{
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'master' &&
+          github.event.workflow_run.head_repository.full_name == github.repository
+        ) ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/master' &&
+          (inputs.operation == 'plan' || (inputs.operation == 'deploy' && inputs.confirm_deploy == true))
+        )
+      }}
     runs-on: ubuntu-latest
     environment: production
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
-      PIPELINE_ENABLED: ${{ inputs.pipeline_enabled }}
+      DEPLOY_OPERATION: ${{ github.event_name == 'workflow_run' && 'deploy' || inputs.operation }}
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      PIPELINE_ENABLED: ${{ github.event_name == 'workflow_run' && 'true' || inputs.pipeline_enabled }}
       SLACK_NOTIFICATIONS_ENABLED: ${{ vars.SLACK_NOTIFICATIONS_ENABLED || 'true' }}
       CALLBACK_TIMEOUT_SECONDS: ${{ vars.CALLBACK_TIMEOUT_SECONDS || '3600' }}
-      PLAN_ONLY: ${{ inputs.operation == 'plan' }}
-      ALLOW_STACK_RECREATE: ${{ inputs.confirm_stack_recreate }}
+      PLAN_ONLY: ${{ github.event_name == 'workflow_run' && 'false' || (inputs.operation == 'plan' && 'true' || 'false') }}
+      ALLOW_STACK_RECREATE: ${{ github.event_name == 'workflow_run' && 'false' || (inputs.confirm_stack_recreate && 'true' || 'false') }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Verify automatic deployment targets current master
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin master
+          current_master="$(git rev-parse origin/master)"
+          if [[ "${TESTED_SHA}" != "${current_master}" ]]; then
+            echo "Refusing stale automatic deployment: tested ${TESTED_SHA}, current master ${current_master}." >&2
+            exit 1
+          fi
 
       - name: Validate requested pipeline state
-        if: ${{ inputs.pipeline_enabled == 'false' && inputs.confirm_disable_pipeline != true }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.pipeline_enabled == 'false' && inputs.confirm_disable_pipeline != true }}
         run: |
           echo 'pipeline_enabled=false requires confirm_disable_pipeline=true.' >&2
           exit 1
 
       - name: Record requested operation
         run: |
-          echo "### Recordings production ${{ inputs.operation }}" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Ref: \`${GITHUB_REF}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "### Recordings production ${DEPLOY_OPERATION}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Trigger: \`${GITHUB_EVENT_NAME}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Tested/deployed SHA: \`${DEPLOY_SHA}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Pipeline enabled: \`${PIPELINE_ENABLED}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Slack notifications enabled: \`${SLACK_NOTIFICATIONS_ENABLED}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Callback timeout seconds: \`${CALLBACK_TIMEOUT_SECONDS}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Stack recreation permitted: \`${ALLOW_STACK_RECREATE}\`" >> "${GITHUB_STEP_SUMMARY}"
 
+      # Keep this cheap safety check immediately before any production credentials are loaded,
+      # even though automatic deployments have already passed the same check in CI.
       - name: Check public source boundary
         run: bash scripts/check-public-source.sh
 
@@ -93,7 +130,8 @@ jobs:
         working-directory: transform
         run: npm ci
 
-      - name: Test transform
+      - name: Test transform for manual deployment
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         working-directory: transform
         run: |
           npm test
@@ -101,11 +139,17 @@ jobs:
           sam validate --lint --template template.yaml
           sam build --template-file template.yaml
 
+      - name: Build CI-tested transform revision
+        if: ${{ github.event_name == 'workflow_run' }}
+        working-directory: transform
+        run: sam build --template-file template.yaml
+
       - name: Install pipeline dependencies
         working-directory: pipeline
         run: npm ci
 
-      - name: Test pipeline
+      - name: Test pipeline for manual deployment
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         working-directory: pipeline
         run: |
           npm test
@@ -113,7 +157,13 @@ jobs:
           sam validate --lint --template template.yaml
           sam build --template-file template.yaml
 
-      - name: Validate deployment IAM template
+      - name: Build CI-tested pipeline revision
+        if: ${{ github.event_name == 'workflow_run' }}
+        working-directory: pipeline
+        run: sam build --template-file template.yaml
+
+      - name: Validate deployment IAM template for manual deployment
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: sam validate --lint --template infrastructure/github-actions-deploy-role.yaml
 
       - name: Verify protected deployment configuration exists
@@ -161,7 +211,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           mask-aws-account-id: true
 
-      - name: ${{ inputs.operation == 'plan' && 'Plan transform changes' || 'Deploy transform' }}
+      - name: ${{ env.PLAN_ONLY == 'true' && 'Plan transform changes' || 'Deploy transform' }}
         working-directory: transform
         env:
           CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
@@ -172,7 +222,7 @@ jobs:
           ALLOW_STACK_RECREATE: ${{ env.ALLOW_STACK_RECREATE }}
         run: bash ./deploy.sh
 
-      - name: ${{ inputs.operation == 'plan' && 'Plan pipeline changes' || 'Deploy pipeline' }}
+      - name: ${{ env.PLAN_ONLY == 'true' && 'Plan pipeline changes' || 'Deploy pipeline' }}
         working-directory: pipeline
         env:
           CODE_BUCKET: ${{ secrets.CODE_BUCKET }}
@@ -190,12 +240,12 @@ jobs:
         run: bash ./deploy.sh
 
       - name: Verify deployed resources are describable
-        if: ${{ inputs.operation == 'deploy' }}
+        if: ${{ env.PLAN_ONLY == 'false' }}
         run: |
           aws cloudformation describe-stacks --stack-name recordings-transform-lambda --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text
           aws cloudformation describe-stacks --stack-name recordings-pipeline --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text
           aws stepfunctions describe-state-machine --state-machine-arn "$(aws cloudformation describe-stacks --stack-name recordings-pipeline --region "${AWS_REGION}" --query "Stacks[0].Outputs[?OutputKey=='StateMachineArn'].OutputValue | [0]" --output text)" --query 'status' --output text
 
       - name: Confirm plan was non-executing
-        if: ${{ inputs.operation == 'plan' }}
+        if: ${{ env.PLAN_ONLY == 'true' }}
         run: echo 'Change sets were created for inspection only; no CloudFormation resource updates were executed.'
