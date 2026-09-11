@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chunkWindows, parseDuration, recordingIdFromKey, safeFilename } from '../src/media-core.mjs';
+import { buildRecordingId, chunkWindows, parseDuration, recordingIdFromKey, safeFilename } from '../src/media-core.mjs';
 
 test('25:17 recording produces five overlapping windows', () => {
   const windows = chunkWindows(1517);
@@ -22,4 +22,33 @@ test('duration parser reads ffmpeg Duration', () => {
 test('filename and recording id are safe', () => {
   assert.equal(safeFilename('../../Call: test?.m4a'), 'Call_ test_.m4a');
   assert.equal(recordingIdFromKey('inbox/abc123/call.m4a'), 'abc123');
+});
+
+test('recording id uses Samsung filename timestamp and call name', () => {
+  assert.equal(
+    buildRecordingId('Call recording British Gas Boiler Service_260906_093458.m4a', {
+      now: new Date('2030-01-01T00:00:00Z'),
+      uniqueId: '123e4567-e89b-12d3-a456-426614174000',
+    }),
+    '20260906-0934-british-gas-boiler-service-123e4567',
+  );
+});
+
+test('recording id falls back to upload UTC time and a generic label', () => {
+  assert.equal(
+    buildRecordingId('Call recording.m4a', {
+      now: new Date('2026-09-11T09:40:12Z'),
+      uniqueId: 'abcdef12-3456-7890-abcd-ef1234567890',
+    }),
+    '20260911-0940-recording-abcdef12',
+  );
+});
+
+test('recording id supports YYYYMMDD timestamps and safe compact labels', () => {
+  assert.equal(
+    buildRecordingId('Voice recording Café & Support_20260911_104512.m4a', {
+      uniqueId: 'feedface-0000-0000-0000-000000000000',
+    }),
+    '20260911-1045-cafe-and-support-feedface',
+  );
 });
