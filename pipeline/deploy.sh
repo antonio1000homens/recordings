@@ -85,7 +85,7 @@ if [[ "${SKIP_SAM_BUILD}" == "true" ]]; then
     echo "SKIP_SAM_BUILD=true but .aws-sam/build/template.yaml does not exist." >&2
     exit 1
   fi
-  echo "Reusing SAM build produced earlier in this job."
+  echo "Reusing prebuilt SAM artifact."
 else
   sam build --template-file template.yaml
 fi
