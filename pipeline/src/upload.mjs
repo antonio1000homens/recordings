@@ -42,11 +42,12 @@ export async function handler(event) {
 
   let input;
   try { input = parseBody(event); } catch { return json(400, { error: 'invalid_json' }); }
-  const filename = safeFilename(input.filename);
+  const originalFilename = input.filename;
+  const filename = safeFilename(originalFilename);
   const contentType = String(input.content_type || input.contentType || 'audio/mp4');
   if (!/^audio\//i.test(contentType)) return json(400, { error: 'invalid_content_type' });
 
-  const recordingId = buildRecordingId(filename, { uniqueId: randomUUID() });
+  const recordingId = buildRecordingId(originalFilename || filename, { uniqueId: randomUUID() });
   const key = `inbox/${recordingId}/${filename}`;
   const command = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType });
   const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
