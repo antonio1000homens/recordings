@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Bootstrap policy allowing the recordings GitHub Actions role to manage the Worker invoker stack.
+
+Parameters:
+  DeploymentRoleName:
+    Type: String
+    Default: GitHubActionsRecordingsDeployRole
+  IngressStackName:
+    Type: String
+    Default: recordings-worker-invoker
+
+Resources:
+  IngressDeploymentPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: recordings-ingress-deployment
+      Roles:
+        - !Ref DeploymentRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ManageIngressStack
+            Effect: Allow
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResource
+              - cloudformation:DescribeStackResources
+              - cloudformation:GetTemplate
+              - cloudformation:ListStackResources
+            Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${IngressStackName}/*
+          - Sid: ManageWorkerInvokerUser
+            Effect: Allow
+            Action:
+              - iam:CreateUser
+              - iam:DeleteUser
+              - iam:GetUser
+              - iam:TagUser
+              - iam:UntagUser
+              - iam:PutUserPolicy
+              - iam:GetUserPolicy
+              - iam:DeleteUserPolicy
+              - iam:ListUserPolicies
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:user/recordings-worker-invoker*
+          - Sid: ReadUploadFunctionUrl
+            Effect: Allow
+            Action: lambda:GetFunctionUrlConfig
+            Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:recordings-upload
