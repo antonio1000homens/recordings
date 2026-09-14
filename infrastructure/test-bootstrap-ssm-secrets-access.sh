@@ -6,6 +6,9 @@ script="${repo_root}/infrastructure/bootstrap-ssm-secrets-access.sh"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
+test_account_id='123456''789012'
+export AWS_TEST_ACCOUNT_ID="${test_account_id}"
+
 mkdir -p "${tmp_dir}/bin"
 cat > "${tmp_dir}/bin/aws" <<'EOF'
 #!/usr/bin/env bash
@@ -14,10 +17,10 @@ printf '%s\n' "$*" >> "${AWS_TEST_LOG}"
 
 case "$1 $2" in
   'sts get-caller-identity')
-    printf '123456789012\n'
+    printf '%s\n' "${AWS_TEST_ACCOUNT_ID}"
     ;;
   'iam get-role')
-    printf 'arn:aws:iam::123456789012:role/GitHubActionsRecordingsDeployRole\n'
+    printf 'arn:aws:iam::%s:role/GitHubActionsRecordingsDeployRole\n' "${AWS_TEST_ACCOUNT_ID}"
     ;;
   'iam put-role-policy')
     policy_file=''
@@ -29,7 +32,8 @@ case "$1 $2" in
       shift
     done
     [[ "${policy_file}" == file://* ]] || { echo 'expected file:// policy document' >&2; exit 1; }
-    jq -e '.Statement[0].Resource == "arn:aws:ssm:eu-west-2:123456789012:parameter/recordings/*"' "${policy_file#file://}" >/dev/null
+    expected_resource="arn:aws:ssm:eu-west-2:${AWS_TEST_ACCOUNT_ID}:parameter/recordings/*"
+    jq -e --arg expected "${expected_resource}" '.Statement[0].Resource == $expected' "${policy_file#file://}" >/dev/null
     jq -e '.Statement[0].Action == ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"]' "${policy_file#file://}" >/dev/null
     ;;
   *)
