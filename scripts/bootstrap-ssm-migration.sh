@@ -36,15 +36,14 @@ AWS_REGION="${AWS_REGION:-eu-west-2}"
 DEPLOYMENT_ROLE_NAME="${DEPLOYMENT_ROLE_NAME:-GitHubActionsRecordingsDeployRole}"
 SSM_PREFIX="${SSM_PREFIX:-/recordings}"
 CODE_BUCKET="${CODE_BUCKET:-}"
-ACTIVATE_SSM=false
 DRY_RUN=false
 
 usage() {
   cat <<EOF
 Usage: scripts/bootstrap-ssm-migration.sh [options]
 
-Bootstrap the recordings Bitwarden -> AWS SSM migration from an authenticated
-local development environment.
+Bootstrap or refresh the recordings AWS SSM configuration from an authenticated
+local development environment. Production workflows use SSM unconditionally.
 
 By default the script loads local configuration from:
   ${default_config_file}
@@ -55,7 +54,7 @@ values you want to persist locally. The real config file is gitignored.
 Prerequisites:
   - aws CLI authenticated to the target AWS account
   - gh CLI authenticated with access to the recordings repository/environment
-  - bws CLI authenticated to Bitwarden Secrets Manager
+  - bws CLI authenticated to Bitwarden Secrets Manager when importing/refreshing values
   - jq
 
 Options:
@@ -67,9 +66,6 @@ Options:
   --ssm-prefix PATH          SSM path (default: /recordings)
   --code-bucket NAME         SAM deployment bucket; required if CODE_BUCKET is not
                              already configured locally or as a GitHub environment variable
-  --activate-ssm             Set GitHub environment variable SECRETS_BACKEND=ssm
-                             after successful bootstrap. Without this flag the
-                             backend is not changed.
   --dry-run                  Validate authentication, Bitwarden mapping and derived
                              configuration without changing AWS or GitHub.
   -h, --help                 Show this help.
@@ -83,8 +79,7 @@ stores/profiles when possible; never commit the populated file.
 
 Bitwarden mapping:
   The script auto-discovers secrets by their logical key names. If a key differs,
-  configure the existing Bitwarden secret UUID using the corresponding workflow
-  variable name:
+  configure the existing Bitwarden secret UUID using the corresponding variable:
 
     BW_RECORDINGS_SHARED_SECRET
     BW_GEMINI_API_KEY
@@ -126,10 +121,6 @@ while [[ $# -gt 0 ]]; do
     --code-bucket)
       CODE_BUCKET="${2:?--code-bucket requires a value}"
       shift 2
-      ;;
-    --activate-ssm)
-      ACTIVATE_SSM=true
-      shift
       ;;
     --dry-run)
       DRY_RUN=true
@@ -250,9 +241,6 @@ DEPLOYMENT_ROLE_NAME="${DEPLOYMENT_ROLE_NAME}" \
 PARAMETER_PREFIX="${SSM_PREFIX#/}" \
   bash "${repo_root}/infrastructure/bootstrap-ssm-secrets-access.sh" >/dev/null
 
-# AWS CLI builds on macOS do not reliably consume `file:///dev/stdin` for
-# --cli-input-json. Keep request JSON in a private temporary directory instead.
-# This avoids putting secret values in the process command line or shell output.
 secret_request_dir="$(mktemp -d)"
 chmod 700 "${secret_request_dir}"
 trap 'rm -rf "${secret_request_dir}"' EXIT
@@ -332,12 +320,4 @@ set_gh_variable AWS_ROLE_TO_ASSUME "${ROLE_ARN}"
 set_gh_variable CODE_BUCKET "${CODE_BUCKET}"
 set_gh_variable SSM_PREFIX "${SSM_PREFIX}"
 
-if [[ "${ACTIVATE_SSM}" == "true" ]]; then
-  set_gh_variable SECRETS_BACKEND ssm
-  echo "SECRETS_BACKEND=ssm is now active for GitHub environment ${GH_ENVIRONMENT}."
-else
-  echo 'SECRETS_BACKEND was not changed. The workflows remain on their current backend.'
-  echo 'After validating the migration, rerun with --activate-ssm or set the variable with gh.'
-fi
-
-echo 'Bootstrap complete. No secret values were written to GitHub.'
+echo 'Bootstrap complete. Production workflows use SSM exclusively; no secret values were written to GitHub.'
