@@ -4,7 +4,7 @@ set -euo pipefail
 AWS_REGION="${AWS_REGION:-eu-west-2}"
 STACK_NAME="${STACK_NAME:-recordings-github-actions-ssm-secrets-access}"
 DEPLOYMENT_ROLE_NAME="${DEPLOYMENT_ROLE_NAME:-GitHubActionsRecordingsDeployRole}"
-PARAMETER_PREFIX="${PARAMETER_PREFIX:-recordings/prod}"
+PARAMETER_PREFIX="${PARAMETER_PREFIX:-recordings}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
