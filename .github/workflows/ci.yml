@@ -34,8 +34,11 @@ jobs:
           infrastructure/bootstrap-deployment-role.sh
           infrastructure/bootstrap-ssm-secrets-access.sh
           cloudflare/recordings-ingress/deploy-ci.sh
+          scripts/bootstrap-ssm-migration.sh
           scripts/load-ssm-secrets.sh
           scripts/test-load-ssm-secrets.sh
+      - name: Check migration bootstrap help
+        run: bash scripts/bootstrap-ssm-migration.sh --help >/dev/null
       - name: Test SSM secret loader
         run: bash scripts/test-load-ssm-secrets.sh
       - name: Validate deployment role template
