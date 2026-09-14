@@ -6,7 +6,12 @@ Tracked by #29.
 
 GitHub Actions already authenticates to AWS using GitHub OIDC and the existing `GitHubActionsRecordingsDeployRole`. No long-lived AWS access key needs to be added to GitHub.
 
-The remaining Bitwarden dependency is secret retrieval. The first migration stage adds read-only access for the existing deployment role to `/recordings/prod/*` and provides a loader for the deployment workflows. The workflows can stay on Bitwarden until the SSM values have been populated and verified.
+The deployment workflows support both secret backends during migration:
+
+- `SECRETS_BACKEND=bitwarden` (the default) keeps the existing Bitwarden Secrets Manager path.
+- `SECRETS_BACKEND=ssm` loads the same runtime environment variables from SSM Parameter Store after GitHub has assumed the AWS deployment role through OIDC.
+
+This makes the migration reversible while the SSM-backed deployment is validated. Remove the Bitwarden path only after both production deployment workflows have succeeded with `SECRETS_BACKEND=ssm`.
 
 ## SSM hierarchy
 
@@ -73,25 +78,47 @@ aws ssm get-parameters-by-path \
 
 Do not query `Parameter.Value` during validation in a shared terminal/log.
 
-## 4. Workflow cutover
+## 4. Enable SSM in GitHub Actions
 
-`scripts/load-ssm-secrets.sh` maps the SSM values to the environment variables already consumed by the deployment scripts:
+Both `.github/workflows/deploy.yml` and `.github/workflows/deploy-ingress.yml` read these production environment variables:
+
+| Variable | Recommended value | Purpose |
+| --- | --- | --- |
+| `SECRETS_BACKEND` | `ssm` | Selects the Parameter Store loader. Defaults to `bitwarden` when unset. |
+| `SSM_PREFIX` | `/recordings/prod` | Parameter hierarchy used by the loader. |
+| `AWS_REGION` | `eu-west-2` | Region containing the deployment role and parameters. |
+| `AWS_ROLE_TO_ASSUME` | existing deploy role ARN | Non-secret OIDC role ARN. The workflows accept the existing secret as a fallback during migration. |
+| `CODE_BUCKET` | existing code bucket name | Non-secret deployment configuration. The main deploy workflow accepts the existing secret as a fallback during migration. |
+
+The loader maps the SSM values to the environment variables already consumed by the deployment scripts:
 
 ```bash
 bash scripts/load-ssm-secrets.sh deploy
 bash scripts/load-ssm-secrets.sh ingress
 ```
 
-The loader masks every retrieved value before writing it to `GITHUB_ENV`.
+Each retrieved value is masked before it is written to `GITHUB_ENV`. The workflows configure AWS credentials before invoking the SSM loader, so SSM access uses the existing GitHub OIDC session rather than static AWS credentials.
 
-The next migration step is to wire this loader into `.github/workflows/deploy.yml` and `.github/workflows/deploy-ingress.yml` behind a temporary backend switch. After an SSM-backed deployment succeeds, remove the Bitwarden action, Bitwarden UIDs, and `BWS_GITHUB_ACTIONS_RECORDINGS_APP` from the production GitHub environment.
+## 5. Safe production rollout
 
-## GitHub configuration after cutover
+1. Merge the migration code while `SECRETS_BACKEND` is unset or set to `bitwarden`; the existing deployment path remains unchanged.
+2. Deploy the SSM access policy and populate all required `SecureString` parameters.
+3. Set the production environment variable `SECRETS_BACKEND=ssm` and, optionally, `SSM_PREFIX=/recordings/prod`.
+4. Manually run **Deploy Recordings** with `operation=plan`. Confirm both SAM change sets can be created using SSM-backed secrets.
+5. Manually run **Deploy Recordings** with `operation=deploy` and the required confirmation.
+6. Manually run **Deploy Recordings Ingress** and confirm the Worker secret sync and deployment complete successfully.
+7. If either path fails, set `SECRETS_BACKEND=bitwarden` to roll back secret retrieval without reverting code.
 
-Long term, GitHub should contain only non-secret deployment configuration such as:
+The workflow summaries record only the selected backend, never secret values.
 
-- `AWS_REGION=eu-west-2`
-- the existing deployment role ARN (this can become an Actions variable rather than a secret)
-- optionally `SSM_PREFIX=/recordings/prod`
+## 6. Remove Bitwarden after validation
 
-The deployment secret values themselves remain in SSM Parameter Store.
+After both production workflows have succeeded with SSM:
+
+- Remove the Bitwarden action steps and the temporary backend switch.
+- Remove `BWS_GITHUB_ACTIONS_RECORDINGS_APP` from the production environment.
+- Remove the `BW_*` secret/variable UIDs from the production environment.
+- Keep `AWS_ROLE_TO_ASSUME`, `AWS_REGION`, `CODE_BUCKET`, and `SSM_PREFIX` as non-secret Actions variables.
+- Keep deployment secret values exclusively in SSM Parameter Store.
+
+The Cloudflare Worker AWS credentials still exist as deployment secrets because the Worker needs them at runtime; this migration moves their source of truth out of GitHub/Bitwarden and into SSM.
