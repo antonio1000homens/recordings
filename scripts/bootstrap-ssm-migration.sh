@@ -7,8 +7,6 @@ default_config_file="${repo_root}/config/bootstrap-ssm-migration.env"
 CONFIG_FILE="${BOOTSTRAP_CONFIG:-${default_config_file}}"
 config_explicit=false
 
-# Resolve --config before loading defaults so values in the config become the
-# baseline and explicit CLI arguments can still override them below.
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   if [[ "${args[$i]}" == "--config" ]]; then
@@ -23,8 +21,6 @@ for ((i = 0; i < ${#args[@]}; i++)); do
 done
 
 if [[ -f "${CONFIG_FILE}" ]]; then
-  # The config file is a trusted local shell environment file. Export values so
-  # optional GH_TOKEN/BWS_ACCESS_TOKEN/AWS_PROFILE settings are inherited by CLIs.
   set -a
   # shellcheck disable=SC1090
   source "${CONFIG_FILE}"
@@ -38,7 +34,7 @@ REPO="${REPO:-antonio1000homens/recordings}"
 GH_ENVIRONMENT="${GH_ENVIRONMENT:-production}"
 AWS_REGION="${AWS_REGION:-eu-west-2}"
 DEPLOYMENT_ROLE_NAME="${DEPLOYMENT_ROLE_NAME:-GitHubActionsRecordingsDeployRole}"
-SSM_PREFIX="${SSM_PREFIX:-/recordings/prod}"
+SSM_PREFIX="${SSM_PREFIX:-/recordings}"
 CODE_BUCKET="${CODE_BUCKET:-}"
 ACTIVATE_SSM=false
 DRY_RUN=false
@@ -68,7 +64,7 @@ Options:
   --environment NAME         GitHub Actions environment (default: production)
   --region REGION            AWS region (default: eu-west-2)
   --role-name NAME           Existing GitHub OIDC deploy role name
-  --ssm-prefix PATH          SSM path (default: /recordings/prod)
+  --ssm-prefix PATH          SSM path (default: /recordings)
   --code-bucket NAME         SAM deployment bucket; required if CODE_BUCKET is not
                              already configured locally or as a GitHub environment variable
   --activate-ssm             Set GitHub environment variable SECRETS_BACKEND=ssm
@@ -105,7 +101,6 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)
-      # Already loaded during the pre-parse above.
       shift 2
       ;;
     --repo)
@@ -174,8 +169,6 @@ GH_REPO="$(gh repo view "${REPO}" --json nameWithOwner --jq .nameWithOwner)"
 echo "${GH_REPO}"
 
 printf 'Checking Bitwarden Secrets Manager authentication... '
-# bws secret list includes secret values, so immediately reduce the response to
-# identifiers and keys before keeping it in shell memory. Nothing is printed.
 BITWARDEN_CATALOG="$(bws secret list --output json | jq -ce '[.[] | {id, key}]')"
 echo 'ok'
 
@@ -269,8 +262,6 @@ put_secret_parameter() {
     exit 1
   fi
 
-  # Feed the API request over stdin so the secret value is not placed in the aws
-  # process command line. Never enable shell tracing around this function.
   jq -n \
     --arg name "${parameter_name}" \
     --arg value "${value}" \
@@ -330,7 +321,7 @@ set_gh_variable SSM_PREFIX "${SSM_PREFIX}"
 
 if [[ "${ACTIVATE_SSM}" == "true" ]]; then
   set_gh_variable SECRETS_BACKEND ssm
-  echo 'SECRETS_BACKEND=ssm is now active for the production environment.'
+  echo "SECRETS_BACKEND=ssm is now active for GitHub environment ${GH_ENVIRONMENT}."
 else
   echo 'SECRETS_BACKEND was not changed. The workflows remain on their current backend.'
   echo 'After validating the migration, rerun with --activate-ssm or set the variable with gh.'

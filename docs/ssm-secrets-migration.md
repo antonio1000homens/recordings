@@ -15,19 +15,19 @@ This makes the migration reversible while the SSM-backed deployment is validated
 
 ## SSM hierarchy
 
-Use standard `SecureString` parameters under `/recordings/prod`:
+Use standard `SecureString` parameters directly under `/recordings`:
 
 | SSM parameter | Used as | Current source |
 | --- | --- | --- |
-| `/recordings/prod/shared-secret` | `RECORDINGS_TRANSFORM_SHARED_SECRET` / `RECORDINGS_SHARED_SECRET` | `BW_RECORDINGS_SHARED_SECRET` |
-| `/recordings/prod/gemini-api-key` | `GEMINI_API_KEY` | `BW_GEMINI_API_KEY` |
-| `/recordings/prod/delivery-webhook` | `RECORDINGS_DELIVERY_WEBHOOK` | `BW_RECORDINGS_DELIVERY_WEBHOOK` |
-| `/recordings/prod/slack-webhook` | `RECORDINGS_SLACK_WEBHOOK` | `BW_RECORDINGS_SLACK_WEBHOOK` |
-| `/recordings/prod/cloudflare/api-token` | `CLOUDFLARE_API_TOKEN` | `BW_CF_DEPLOY_API_TOKEN` |
-| `/recordings/prod/worker/aws-access-key-id` | `RECORDINGS_WORKER_AWS_ACCESS_KEY_ID` | `BW_RECORDINGS_WORKER_AWS_ACCESS_KEY_ID` |
-| `/recordings/prod/worker/aws-secret-access-key` | `RECORDINGS_WORKER_AWS_SECRET_ACCESS_KEY` | `BW_RECORDINGS_WORKER_AWS_SECRET_ACCESS_KEY` |
+| `/recordings/shared-secret` | `RECORDINGS_TRANSFORM_SHARED_SECRET` / `RECORDINGS_SHARED_SECRET` | `BW_RECORDINGS_SHARED_SECRET` |
+| `/recordings/gemini-api-key` | `GEMINI_API_KEY` | `BW_GEMINI_API_KEY` |
+| `/recordings/delivery-webhook` | `RECORDINGS_DELIVERY_WEBHOOK` | `BW_RECORDINGS_DELIVERY_WEBHOOK` |
+| `/recordings/slack-webhook` | `RECORDINGS_SLACK_WEBHOOK` | `BW_RECORDINGS_SLACK_WEBHOOK` |
+| `/recordings/cloudflare/api-token` | `CLOUDFLARE_API_TOKEN` | `BW_CF_DEPLOY_API_TOKEN` |
+| `/recordings/worker/aws-access-key-id` | `RECORDINGS_WORKER_AWS_ACCESS_KEY_ID` | `BW_RECORDINGS_WORKER_AWS_ACCESS_KEY_ID` |
+| `/recordings/worker/aws-secret-access-key` | `RECORDINGS_WORKER_AWS_SECRET_ACCESS_KEY` | `BW_RECORDINGS_WORKER_AWS_SECRET_ACCESS_KEY` |
 
-The shared secret intentionally has one SSM value even though the two workflows expose it under different environment variable names.
+There is no additional environment segment such as `/prod`; this repository uses `/recordings` as its complete hierarchy. The shared secret intentionally has one SSM value even though the two workflows expose it under different environment variable names.
 
 ## Recommended: bootstrap from the authenticated development environment
 
@@ -50,7 +50,7 @@ The bootstrap:
 6. verifies the SSM parameter names without reading values back into logs; and
 7. creates/updates non-secret GitHub production variables (`AWS_REGION`, `AWS_ROLE_TO_ASSUME`, `CODE_BUCKET`, and `SSM_PREFIX`).
 
-It does **not** change `SECRETS_BACKEND` unless `--activate-ssm` is explicitly supplied.
+A normal bootstrap configures GitHub to know where the SSM hierarchy is, but deliberately leaves the current secret backend unchanged. The actual cutover is the same script run with `--activate-ssm`, which additionally sets `SECRETS_BACKEND=ssm`.
 
 ### 1. Create your local configuration
 
@@ -108,9 +108,18 @@ The dry run checks AWS/GitHub/Bitwarden authentication, confirms the existing OI
 bash scripts/bootstrap-ssm-migration.sh
 ```
 
-At the end of this run the SSM parameters exist and the GitHub non-secret variables are configured, but the workflows remain on their current backend (normally Bitwarden).
+This creates/updates the SSM parameters and writes these non-secret values to the GitHub `production` environment:
 
-### 4. Activate SSM only after the migration code is merged
+```text
+AWS_REGION=eu-west-2
+AWS_ROLE_TO_ASSUME=<resolved OIDC deploy role ARN>
+CODE_BUCKET=<configured deployment bucket>
+SSM_PREFIX=/recordings
+```
+
+At this point GitHub is configured with the SSM location, but the workflows remain on their current backend (normally Bitwarden) because `SECRETS_BACKEND` has not been changed.
+
+### 4. Activate SSM
 
 After the migration code is present on `master`, run:
 
@@ -118,11 +127,13 @@ After the migration code is present on `master`, run:
 bash scripts/bootstrap-ssm-migration.sh --activate-ssm
 ```
 
-This repeats the idempotent bootstrap and finally sets the production GitHub Actions variable:
+This repeats the idempotent bootstrap and also sets:
 
 ```text
 SECRETS_BACKEND=ssm
 ```
+
+From that point both deployment workflows authenticate to AWS through OIDC and read their deployment secrets from `/recordings/...` in Parameter Store. No GitHub secret is populated with the SSM values themselves.
 
 You can also activate it directly without rerunning the bootstrap:
 
@@ -166,7 +177,7 @@ AWS_REGION=eu-west-2 bash infrastructure/bootstrap-ssm-secrets-access.sh
 This deploys a policy scoped to:
 
 ```text
-arn:aws:ssm:eu-west-2:<account-id>:parameter/recordings/prod/*
+arn:aws:ssm:eu-west-2:<account-id>:parameter/recordings/*
 ```
 
 It does not grant `ssm:PutParameter` or `ssm:DeleteParameter` to GitHub Actions.
@@ -178,7 +189,7 @@ Do not commit secret values to this repository. Populate each parameter from a t
 ```bash
 aws ssm put-parameter \
   --region eu-west-2 \
-  --name /recordings/prod/gemini-api-key \
+  --name /recordings/gemini-api-key \
   --type SecureString \
   --value "$GEMINI_API_KEY" \
   --overwrite
@@ -195,7 +206,7 @@ Assuming the GitHub role (or using an equivalent local identity), confirm the na
 ```bash
 aws ssm get-parameters-by-path \
   --region eu-west-2 \
-  --path /recordings/prod \
+  --path /recordings \
   --recursive \
   --with-decryption \
   --query 'Parameters[].Name' \
@@ -211,7 +222,7 @@ Both `.github/workflows/deploy.yml` and `.github/workflows/deploy-ingress.yml` r
 | Variable | Recommended value | Purpose |
 | --- | --- | --- |
 | `SECRETS_BACKEND` | `ssm` | Selects the Parameter Store loader. Defaults to `bitwarden` when unset. |
-| `SSM_PREFIX` | `/recordings/prod` | Parameter hierarchy used by the loader. |
+| `SSM_PREFIX` | `/recordings` | Parameter hierarchy used by the loader. |
 | `AWS_REGION` | `eu-west-2` | Region containing the deployment role and parameters. |
 | `AWS_ROLE_TO_ASSUME` | existing deploy role ARN | Non-secret OIDC role ARN. The workflows accept the existing secret as a fallback during migration. |
 | `CODE_BUCKET` | existing code bucket name | Non-secret deployment configuration. The main deploy workflow accepts the existing secret as a fallback during migration. |
@@ -228,8 +239,8 @@ Each retrieved value is masked before it is written to `GITHUB_ENV`. The workflo
 ## Safe production rollout
 
 1. Merge the migration code while `SECRETS_BACKEND` is unset or set to `bitwarden`; the existing deployment path remains unchanged.
-2. Copy and populate the local config, then run the bootstrap without `--activate-ssm` to deploy SSM access, copy Bitwarden values into SSM, and configure non-secret GitHub variables.
-3. Set `SECRETS_BACKEND=ssm` using `--activate-ssm` only after the migration code is on `master`.
+2. Copy and populate the local config, then run the bootstrap without `--activate-ssm` to deploy SSM access, copy Bitwarden values into SSM, and configure the GitHub variables including `SSM_PREFIX=/recordings`.
+3. Run the same bootstrap with `--activate-ssm` to set `SECRETS_BACKEND=ssm` only after the migration code is on `master`.
 4. Manually run **Deploy Recordings** with `operation=plan`. Confirm both SAM change sets can be created using SSM-backed secrets.
 5. Manually run **Deploy Recordings** with `operation=deploy` and the required confirmation.
 6. Manually run **Deploy Recordings Ingress** and confirm the Worker secret sync and deployment complete successfully.
