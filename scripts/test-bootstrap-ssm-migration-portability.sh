@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="${repo_root}/scripts/bootstrap-ssm-migration.sh"
 
-if grep -Fq 'file:///dev/stdin' "${script}"; then
+if grep -Fq -- '--cli-input-json file:///dev/stdin' "${script}"; then
   echo 'bootstrap must not use file:///dev/stdin for AWS CLI JSON input' >&2
   exit 1
 fi
