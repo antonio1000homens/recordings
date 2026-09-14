@@ -39,6 +39,7 @@ Prerequisites:
 - `gh` is authenticated and can update Actions variables on `antonio1000homens/recordings`.
 - `bws` is authenticated to the Bitwarden Secrets Manager project containing the existing recordings secrets.
 - `jq` is installed.
+- `CODE_BUCKET` is set locally to the existing recordings SAM deployment bucket, or passed with `--code-bucket`.
 
 The bootstrap:
 
@@ -54,11 +55,13 @@ It does **not** change `SECRETS_BACKEND` unless `--activate-ssm` is explicitly s
 
 ### 1. Validate everything without making changes
 
-From the repository branch containing this migration:
+Set the existing deployment bucket in your local shell, then run the dry-run from the repository branch containing this migration:
 
 ```bash
+export CODE_BUCKET='<existing-recordings-sam-deployment-bucket>'
+
 bash scripts/bootstrap-ssm-migration.sh \
-  --code-bucket aws2022-lambda-code \
+  --code-bucket "$CODE_BUCKET" \
   --dry-run
 ```
 
@@ -68,7 +71,7 @@ The dry run checks AWS/GitHub/Bitwarden authentication, confirms the existing OI
 
 ```bash
 bash scripts/bootstrap-ssm-migration.sh \
-  --code-bucket aws2022-lambda-code
+  --code-bucket "$CODE_BUCKET"
 ```
 
 At the end of this run the SSM parameters exist and the GitHub non-secret variables are configured, but the workflows remain on their current backend (normally Bitwarden).
@@ -79,7 +82,7 @@ After the migration code is present on `master`, run:
 
 ```bash
 bash scripts/bootstrap-ssm-migration.sh \
-  --code-bucket aws2022-lambda-code \
+  --code-bucket "$CODE_BUCKET" \
   --activate-ssm
 ```
 
