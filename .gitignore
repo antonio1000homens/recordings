@@ -8,6 +8,7 @@ coverage/
 .env
 .env.*
 !.env.example
+config/bootstrap-ssm-migration.env
 *.pem
 *.key
 *.p12
