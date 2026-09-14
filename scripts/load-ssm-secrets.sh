@@ -3,7 +3,7 @@ set -euo pipefail
 
 mode="${1:-}"
 AWS_REGION="${AWS_REGION:-eu-west-2}"
-SSM_PREFIX="${SSM_PREFIX:-/recordings/prod}"
+SSM_PREFIX="${SSM_PREFIX:-/recordings}"
 
 if [[ -z "${GITHUB_ENV:-}" ]]; then
   echo 'GITHUB_ENV is required; this script is intended for GitHub Actions.' >&2
