@@ -76,7 +76,6 @@ jobs:
       CALLBACK_TIMEOUT_SECONDS: ${{ vars.CALLBACK_TIMEOUT_SECONDS || '3600' }}
       PLAN_ONLY: ${{ github.event_name == 'workflow_run' && 'false' || (inputs.operation == 'plan' && 'true' || 'false') }}
       ALLOW_STACK_RECREATE: ${{ github.event_name == 'workflow_run' && 'false' || (inputs.confirm_stack_recreate && 'true' || 'false') }}
-      SECRETS_BACKEND: ${{ vars.SECRETS_BACKEND || 'bitwarden' }}
       SSM_PREFIX: ${{ vars.SSM_PREFIX || '/recordings' }}
     steps:
       - uses: actions/checkout@v5
@@ -110,7 +109,7 @@ jobs:
           echo "- Slack notifications enabled: \`${SLACK_NOTIFICATIONS_ENABLED}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Callback timeout seconds: \`${CALLBACK_TIMEOUT_SECONDS}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Stack recreation permitted: \`${ALLOW_STACK_RECREATE}\`" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Secrets backend: \`${SECRETS_BACKEND}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo '- Secrets source: `AWS SSM Parameter Store`' >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Check public source boundary
         run: bash scripts/check-public-source.sh
@@ -188,71 +187,30 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run: sam validate --lint --template infrastructure/github-actions-deploy-role.yaml
 
-      - name: Verify protected deployment configuration exists
+      - name: Verify production deployment configuration exists
         env:
-          AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME || secrets.AWS_ROLE_TO_ASSUME }}
-          CODE_BUCKET: ${{ vars.CODE_BUCKET || secrets.CODE_BUCKET }}
-          BWS_ACCESS_TOKEN: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
-          BW_RECORDINGS_SHARED_SECRET: ${{ secrets.BW_RECORDINGS_SHARED_SECRET }}
-          BW_GEMINI_API_KEY: ${{ secrets.BW_GEMINI_API_KEY }}
-          BW_RECORDINGS_DELIVERY_WEBHOOK: ${{ secrets.BW_RECORDINGS_DELIVERY_WEBHOOK }}
-          BW_RECORDINGS_SLACK_WEBHOOK: ${{ secrets.BW_RECORDINGS_SLACK_WEBHOOK }}
+          AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          CODE_BUCKET: ${{ vars.CODE_BUCKET }}
         run: |
-          test -n "${AWS_ROLE_TO_ASSUME}" || { echo 'AWS_ROLE_TO_ASSUME is not configured in the production environment.' >&2; exit 1; }
-          test -n "${CODE_BUCKET}" || { echo 'CODE_BUCKET is not configured in the production environment.' >&2; exit 1; }
-          case "${SECRETS_BACKEND}" in
-            bitwarden)
-              test -n "${BWS_ACCESS_TOKEN}" || { echo 'BWS_GITHUB_ACTIONS_RECORDINGS_APP is not configured in the production environment.' >&2; exit 1; }
-              test -n "${BW_RECORDINGS_SHARED_SECRET}" || { echo 'BW_RECORDINGS_SHARED_SECRET is not configured as a production environment secret.' >&2; exit 1; }
-              test -n "${BW_GEMINI_API_KEY}" || { echo 'BW_GEMINI_API_KEY is not configured as a production environment secret.' >&2; exit 1; }
-              test -n "${BW_RECORDINGS_DELIVERY_WEBHOOK}" || { echo 'BW_RECORDINGS_DELIVERY_WEBHOOK is not configured as a production environment secret.' >&2; exit 1; }
-              if [[ "${SLACK_NOTIFICATIONS_ENABLED}" == "true" ]]; then
-                test -n "${BW_RECORDINGS_SLACK_WEBHOOK}" || { echo 'BW_RECORDINGS_SLACK_WEBHOOK is required when Slack notifications are enabled.' >&2; exit 1; }
-              fi
-              ;;
-            ssm)
-              test -n "${SSM_PREFIX}" || { echo 'SSM_PREFIX must not be empty when SECRETS_BACKEND=ssm.' >&2; exit 1; }
-              ;;
-            *)
-              echo "Unsupported SECRETS_BACKEND=${SECRETS_BACKEND}; expected bitwarden or ssm." >&2
-              exit 1
-              ;;
-          esac
+          test -n "${AWS_ROLE_TO_ASSUME}" || { echo 'AWS_ROLE_TO_ASSUME must be configured as a production environment variable.' >&2; exit 1; }
+          test -n "${CODE_BUCKET}" || { echo 'CODE_BUCKET must be configured as a production environment variable.' >&2; exit 1; }
+          test -n "${SSM_PREFIX}" || { echo 'SSM_PREFIX must not be empty.' >&2; exit 1; }
 
       - name: Configure recordings-only AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.0.0
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME || secrets.AWS_ROLE_TO_ASSUME }}
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           role-session-name: github-actions-recordings-production
           aws-region: ${{ env.AWS_REGION }}
           mask-aws-account-id: true
 
-      - name: Load recordings secrets from Bitwarden Secrets Manager
-        if: ${{ env.SECRETS_BACKEND == 'bitwarden' }}
-        uses: bitwarden/sm-action@v3.0.1
-        with:
-          access_token: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
-          secrets: |
-            ${{ secrets.BW_RECORDINGS_SHARED_SECRET }} > RECORDINGS_TRANSFORM_SHARED_SECRET
-            ${{ secrets.BW_GEMINI_API_KEY }} > GEMINI_API_KEY
-            ${{ secrets.BW_RECORDINGS_DELIVERY_WEBHOOK }} > RECORDINGS_DELIVERY_WEBHOOK
-
-      - name: Load Slack webhook from Bitwarden Secrets Manager
-        if: ${{ env.SECRETS_BACKEND == 'bitwarden' && env.SLACK_NOTIFICATIONS_ENABLED == 'true' }}
-        uses: bitwarden/sm-action@v3.0.1
-        with:
-          access_token: ${{ secrets.BWS_GITHUB_ACTIONS_RECORDINGS_APP }}
-          secrets: |
-            ${{ secrets.BW_RECORDINGS_SLACK_WEBHOOK }} > RECORDINGS_SLACK_WEBHOOK
-
       - name: Load recordings secrets from SSM Parameter Store
-        if: ${{ env.SECRETS_BACKEND == 'ssm' }}
         run: bash scripts/load-ssm-secrets.sh deploy
 
       - name: ${{ env.PLAN_ONLY == 'true' && 'Plan transform changes' || 'Deploy transform' }}
         working-directory: transform
         env:
-          CODE_BUCKET: ${{ vars.CODE_BUCKET || secrets.CODE_BUCKET }}
+          CODE_BUCKET: ${{ vars.CODE_BUCKET }}
           S3_PREFIX: recordings/transform
           RECORDINGS_TRANSFORM_SHARED_SECRET: ${{ env.RECORDINGS_TRANSFORM_SHARED_SECRET }}
           SKIP_SAM_BUILD: 'true'
@@ -263,7 +221,7 @@ jobs:
       - name: ${{ env.PLAN_ONLY == 'true' && 'Plan pipeline changes' || 'Deploy pipeline' }}
         working-directory: pipeline
         env:
-          CODE_BUCKET: ${{ vars.CODE_BUCKET || secrets.CODE_BUCKET }}
+          CODE_BUCKET: ${{ vars.CODE_BUCKET }}
           S3_PREFIX: recordings/pipeline
           RECORDINGS_TRANSFORM_SHARED_SECRET: ${{ env.RECORDINGS_TRANSFORM_SHARED_SECRET }}
           GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
