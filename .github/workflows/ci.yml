@@ -37,9 +37,12 @@ jobs:
           cloudflare/recordings-ingress/deploy-ci.sh
           scripts/bootstrap-ssm-migration.sh
           scripts/load-ssm-secrets.sh
+          scripts/test-bootstrap-ssm-migration-portability.sh
           scripts/test-load-ssm-secrets.sh
       - name: Check migration bootstrap help
         run: bash scripts/bootstrap-ssm-migration.sh --help >/dev/null
+      - name: Test migration bootstrap portability
+        run: bash scripts/test-bootstrap-ssm-migration-portability.sh
       - name: Test SSM access bootstrap
         run: bash infrastructure/test-bootstrap-ssm-secrets-access.sh
       - name: Test SSM secret loader

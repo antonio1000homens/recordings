@@ -250,11 +250,19 @@ DEPLOYMENT_ROLE_NAME="${DEPLOYMENT_ROLE_NAME}" \
 PARAMETER_PREFIX="${SSM_PREFIX#/}" \
   bash "${repo_root}/infrastructure/bootstrap-ssm-secrets-access.sh" >/dev/null
 
+# AWS CLI builds on macOS do not reliably consume `file:///dev/stdin` for
+# --cli-input-json. Keep request JSON in a private temporary directory instead.
+# This avoids putting secret values in the process command line or shell output.
+secret_request_dir="$(mktemp -d)"
+chmod 700 "${secret_request_dir}"
+trap 'rm -rf "${secret_request_dir}"' EXIT
+
 put_secret_parameter() {
   local relative_name="$1"
   local secret_id="$2"
   local parameter_name="${SSM_PREFIX%/}/${relative_name}"
   local value
+  local request_file
 
   value="$(bws secret get "${secret_id}" --output json | jq -er '.value')"
   if [[ -z "${value}" ]]; then
@@ -262,15 +270,20 @@ put_secret_parameter() {
     exit 1
   fi
 
+  request_file="$(mktemp "${secret_request_dir}/put-parameter.XXXXXX")"
+  chmod 600 "${request_file}"
   jq -n \
     --arg name "${parameter_name}" \
     --arg value "${value}" \
     '{Name:$name, Type:"SecureString", Value:$value, Overwrite:true}' \
-    | aws ssm put-parameter \
-        --region "${AWS_REGION}" \
-        --cli-input-json file:///dev/stdin \
-        >/dev/null
+    > "${request_file}"
 
+  aws ssm put-parameter \
+    --region "${AWS_REGION}" \
+    --cli-input-json "file://${request_file}" \
+    >/dev/null
+
+  rm -f "${request_file}"
   unset value
   echo "Stored ${parameter_name}"
 }
@@ -304,6 +317,7 @@ for relative_name in \
   }
 done
 
+echo 'Writing non-secret GitHub Actions environment variables...'
 set_gh_variable() {
   local name="$1"
   local value="$2"
@@ -313,7 +327,6 @@ set_gh_variable() {
     --body "${value}"
 }
 
-echo 'Writing non-secret GitHub Actions environment variables...'
 set_gh_variable AWS_REGION "${AWS_REGION}"
 set_gh_variable AWS_ROLE_TO_ASSUME "${ROLE_ARN}"
 set_gh_variable CODE_BUCKET "${CODE_BUCKET}"
