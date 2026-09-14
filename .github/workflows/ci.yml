@@ -27,13 +27,25 @@ jobs:
           use-installer: true
           token: ${{ github.token }}
       - name: Syntax-check deployment scripts
-        run: bash -n pipeline/deploy.sh transform/deploy.sh infrastructure/bootstrap-deployment-role.sh cloudflare/recordings-ingress/deploy-ci.sh
+        run: >-
+          bash -n
+          pipeline/deploy.sh
+          transform/deploy.sh
+          infrastructure/bootstrap-deployment-role.sh
+          infrastructure/bootstrap-ssm-secrets-access.sh
+          cloudflare/recordings-ingress/deploy-ci.sh
+          scripts/load-ssm-secrets.sh
+          scripts/test-load-ssm-secrets.sh
+      - name: Test SSM secret loader
+        run: bash scripts/test-load-ssm-secrets.sh
       - name: Validate deployment role template
         run: sam validate --lint --template infrastructure/github-actions-deploy-role.yaml
       - name: Validate Worker invoker template
         run: sam validate --lint --template infrastructure/recordings-worker-invoker.yaml
       - name: Validate ingress deployment bootstrap policy
         run: sam validate --lint --template infrastructure/github-actions-ingress-deploy-policy.yaml
+      - name: Validate SSM secrets access policy
+        run: sam validate --lint --template infrastructure/github-actions-ssm-secrets-access.yaml
 
   ingress:
     runs-on: ubuntu-latest
