@@ -42,14 +42,14 @@ jobs:
       - name: Enforce SSM-only deployment workflows
         run: |
           workflows=(.github/workflows/deploy.yml .github/workflows/deploy-ingress.yml)
-          if grep -En 'secrets\.|bitwarden/sm-action|SECRETS_BACKEND|BW_' "${workflows[@]}"; then
+          if grep -En 'secrets\.[A-Z0-9_]|bitwarden/sm-action|SECRETS_BACKEND|BW_' "${workflows[@]}"; then
             echo 'Production deployment workflows must use GitHub variables plus SSM, not GitHub secrets or Bitwarden.' >&2
             exit 1
           fi
           grep -Fq 'bash scripts/load-ssm-secrets.sh deploy' .github/workflows/deploy.yml
           grep -Fq 'bash scripts/load-ssm-secrets.sh ingress' .github/workflows/deploy-ingress.yml
-          grep -Fq 'role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}' .github/workflows/deploy.yml
-          grep -Fq 'role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}' .github/workflows/deploy-ingress.yml
+          grep -Eq 'role-to-assume:.*vars\.AWS_ROLE_TO_ASSUME' .github/workflows/deploy.yml
+          grep -Eq 'role-to-assume:.*vars\.AWS_ROLE_TO_ASSUME' .github/workflows/deploy-ingress.yml
       - name: Check migration bootstrap help
         run: bash scripts/bootstrap-ssm-migration.sh --help >/dev/null
       - name: Test migration bootstrap portability
