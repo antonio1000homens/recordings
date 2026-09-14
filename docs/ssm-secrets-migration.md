@@ -31,7 +31,7 @@ The shared secret intentionally has one SSM value even though the two workflows 
 
 ## Recommended: bootstrap from the authenticated development environment
 
-`scripts/bootstrap-ssm-migration.sh` performs the migration setup from a local development environment that is already authenticated to AWS, GitHub and Bitwarden Secrets Manager.
+`scripts/bootstrap-ssm-migration.sh` performs the migration setup from a local development environment that is authenticated to AWS, GitHub and Bitwarden Secrets Manager.
 
 Prerequisites:
 
@@ -39,7 +39,6 @@ Prerequisites:
 - `gh` is authenticated and can update Actions variables on `antonio1000homens/recordings`.
 - `bws` is authenticated to the Bitwarden Secrets Manager project containing the existing recordings secrets.
 - `jq` is installed.
-- `CODE_BUCKET` is set locally to the existing recordings SAM deployment bucket, or passed with `--code-bucket`.
 
 The bootstrap:
 
@@ -53,37 +52,70 @@ The bootstrap:
 
 It does **not** change `SECRETS_BACKEND` unless `--activate-ssm` is explicitly supplied.
 
-### 1. Validate everything without making changes
+### 1. Create your local configuration
 
-Set the existing deployment bucket in your local shell, then run the dry-run from the repository branch containing this migration:
+Copy the committed template to the gitignored local configuration file:
 
 ```bash
-export CODE_BUCKET='<existing-recordings-sam-deployment-bucket>'
+cp config/bootstrap-ssm-migration.env.example config/bootstrap-ssm-migration.env
+chmod 600 config/bootstrap-ssm-migration.env
+```
 
+Edit `config/bootstrap-ssm-migration.env` and set the values appropriate to your development environment. At minimum, set `CODE_BUCKET` if it is not already available as a GitHub production environment variable.
+
+The template supports:
+
+```text
+REPO
+GH_ENVIRONMENT
+AWS_REGION
+DEPLOYMENT_ROLE_NAME
+SSM_PREFIX
+CODE_BUCKET
+AWS_PROFILE                 # optional
+GH_TOKEN                    # optional
+BWS_ACCESS_TOKEN            # optional
+BW_* secret UUID overrides  # optional
+```
+
+If `aws`, `gh`, and `bws` are already authenticated, leave the token/profile lines commented. Prefer the existing CLI credential stores and an AWS profile rather than putting long-lived AWS access keys in this file.
+
+`config/bootstrap-ssm-migration.env` is explicitly ignored by Git and must never be committed. The script treats it as a trusted local shell environment file and exports its values to the AWS, GitHub, and Bitwarden CLIs.
+
+A different config can be selected explicitly:
+
+```bash
 bash scripts/bootstrap-ssm-migration.sh \
-  --code-bucket "$CODE_BUCKET" \
+  --config /path/to/my-recordings-migration.env \
   --dry-run
 ```
 
-The dry run checks AWS/GitHub/Bitwarden authentication, confirms the existing OIDC role, verifies the code bucket input, and resolves all required Bitwarden secret IDs. It does not change AWS or GitHub.
+CLI arguments override values loaded from the config file.
 
-### 2. Bootstrap IAM, SSM parameters and GitHub variables
+### 2. Validate everything without making changes
+
+With `config/bootstrap-ssm-migration.env` populated:
 
 ```bash
-bash scripts/bootstrap-ssm-migration.sh \
-  --code-bucket "$CODE_BUCKET"
+bash scripts/bootstrap-ssm-migration.sh --dry-run
+```
+
+The dry run checks AWS/GitHub/Bitwarden authentication, confirms the existing OIDC role, verifies the code bucket configuration, and resolves all required Bitwarden secret IDs. It does not change AWS or GitHub.
+
+### 3. Bootstrap IAM, SSM parameters and GitHub variables
+
+```bash
+bash scripts/bootstrap-ssm-migration.sh
 ```
 
 At the end of this run the SSM parameters exist and the GitHub non-secret variables are configured, but the workflows remain on their current backend (normally Bitwarden).
 
-### 3. Activate SSM only after the migration code is merged
+### 4. Activate SSM only after the migration code is merged
 
 After the migration code is present on `master`, run:
 
 ```bash
-bash scripts/bootstrap-ssm-migration.sh \
-  --code-bucket "$CODE_BUCKET" \
-  --activate-ssm
+bash scripts/bootstrap-ssm-migration.sh --activate-ssm
 ```
 
 This repeats the idempotent bootstrap and finally sets the production GitHub Actions variable:
@@ -103,19 +135,19 @@ gh variable set SECRETS_BACKEND \
 
 ### Bitwarden key/ID overrides
 
-The bootstrap normally finds the required Bitwarden records by their logical key names. If an existing Bitwarden key uses a different name, export its UUID using the same identifier variable already used by the workflows, then rerun the bootstrap:
+The bootstrap normally finds the required Bitwarden records by their logical key names. If an existing Bitwarden key uses a different name or multiple records match, set its UUID in the local config using the same identifier variable already used by the workflows:
 
 ```bash
-export BW_RECORDINGS_SHARED_SECRET='<bitwarden-secret-uuid>'
-export BW_GEMINI_API_KEY='<bitwarden-secret-uuid>'
-export BW_RECORDINGS_DELIVERY_WEBHOOK='<bitwarden-secret-uuid>'
-export BW_RECORDINGS_SLACK_WEBHOOK='<bitwarden-secret-uuid>'
-export BW_CF_DEPLOY_API_TOKEN='<bitwarden-secret-uuid>'
-export BW_RECORDINGS_WORKER_AWS_ACCESS_KEY_ID='<bitwarden-secret-uuid>'
-export BW_RECORDINGS_WORKER_AWS_SECRET_ACCESS_KEY='<bitwarden-secret-uuid>'
+BW_RECORDINGS_SHARED_SECRET='<bitwarden-secret-uuid>'
+BW_GEMINI_API_KEY='<bitwarden-secret-uuid>'
+BW_RECORDINGS_DELIVERY_WEBHOOK='<bitwarden-secret-uuid>'
+BW_RECORDINGS_SLACK_WEBHOOK='<bitwarden-secret-uuid>'
+BW_CF_DEPLOY_API_TOKEN='<bitwarden-secret-uuid>'
+BW_RECORDINGS_WORKER_AWS_ACCESS_KEY_ID='<bitwarden-secret-uuid>'
+BW_RECORDINGS_WORKER_AWS_SECRET_ACCESS_KEY='<bitwarden-secret-uuid>'
 ```
 
-These variables contain Bitwarden record IDs, not secret values.
+These values are Bitwarden record IDs, not the secret values themselves.
 
 The script deliberately does not attempt to read existing GitHub Actions secret values: GitHub does not expose secret values after they have been stored. Secret migration is therefore sourced directly from the authenticated Bitwarden CLI.
 
@@ -196,7 +228,7 @@ Each retrieved value is masked before it is written to `GITHUB_ENV`. The workflo
 ## Safe production rollout
 
 1. Merge the migration code while `SECRETS_BACKEND` is unset or set to `bitwarden`; the existing deployment path remains unchanged.
-2. Run the local bootstrap without `--activate-ssm` to deploy SSM access, copy Bitwarden values into SSM, and configure non-secret GitHub variables.
+2. Copy and populate the local config, then run the bootstrap without `--activate-ssm` to deploy SSM access, copy Bitwarden values into SSM, and configure non-secret GitHub variables.
 3. Set `SECRETS_BACKEND=ssm` using `--activate-ssm` only after the migration code is on `master`.
 4. Manually run **Deploy Recordings** with `operation=plan`. Confirm both SAM change sets can be created using SSM-backed secrets.
 5. Manually run **Deploy Recordings** with `operation=deploy` and the required confirmation.
