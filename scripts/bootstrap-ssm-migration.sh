@@ -1,6 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+default_config_file="${repo_root}/config/bootstrap-ssm-migration.env"
+CONFIG_FILE="${BOOTSTRAP_CONFIG:-${default_config_file}}"
+config_explicit=false
+
+# Resolve --config before loading defaults so values in the config become the
+# baseline and explicit CLI arguments can still override them below.
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == "--config" ]]; then
+    if ((i + 1 >= ${#args[@]})); then
+      echo '--config requires a value.' >&2
+      exit 2
+    fi
+    CONFIG_FILE="${args[$((i + 1))]}"
+    config_explicit=true
+    ((i += 1))
+  fi
+done
+
+if [[ -f "${CONFIG_FILE}" ]]; then
+  # The config file is a trusted local shell environment file. Export values so
+  # optional GH_TOKEN/BWS_ACCESS_TOKEN/AWS_PROFILE settings are inherited by CLIs.
+  set -a
+  # shellcheck disable=SC1090
+  source "${CONFIG_FILE}"
+  set +a
+elif [[ "${config_explicit}" == "true" ]]; then
+  echo "Configuration file not found: ${CONFIG_FILE}" >&2
+  exit 1
+fi
+
 REPO="${REPO:-antonio1000homens/recordings}"
 GH_ENVIRONMENT="${GH_ENVIRONMENT:-production}"
 AWS_REGION="${AWS_REGION:-eu-west-2}"
@@ -11,11 +44,17 @@ ACTIVATE_SSM=false
 DRY_RUN=false
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage: scripts/bootstrap-ssm-migration.sh [options]
 
 Bootstrap the recordings Bitwarden -> AWS SSM migration from an authenticated
 local development environment.
+
+By default the script loads local configuration from:
+  ${default_config_file}
+
+Copy config/bootstrap-ssm-migration.env.example to that path and fill in the
+values you want to persist locally. The real config file is gitignored.
 
 Prerequisites:
   - aws CLI authenticated to the target AWS account
@@ -24,13 +63,14 @@ Prerequisites:
   - jq
 
 Options:
+  --config FILE              Load a different local configuration file
   --repo OWNER/REPO          GitHub repository (default: antonio1000homens/recordings)
   --environment NAME         GitHub Actions environment (default: production)
   --region REGION            AWS region (default: eu-west-2)
   --role-name NAME           Existing GitHub OIDC deploy role name
   --ssm-prefix PATH          SSM path (default: /recordings/prod)
   --code-bucket NAME         SAM deployment bucket; required if CODE_BUCKET is not
-                             already a GitHub environment variable
+                             already configured locally or as a GitHub environment variable
   --activate-ssm             Set GitHub environment variable SECRETS_BACKEND=ssm
                              after successful bootstrap. Without this flag the
                              backend is not changed.
@@ -38,10 +78,17 @@ Options:
                              configuration without changing AWS or GitHub.
   -h, --help                 Show this help.
 
+Configuration precedence:
+  CLI argument > config file/environment variable > built-in default.
+
+Optional authentication values such as GH_TOKEN, BWS_ACCESS_TOKEN and AWS_PROFILE
+can be placed in the gitignored local config file. Prefer existing CLI credential
+stores/profiles when possible; never commit the populated file.
+
 Bitwarden mapping:
   The script auto-discovers secrets by their logical key names. If a key differs,
-  export the existing Bitwarden secret UUID before running using the corresponding
-  workflow variable name:
+  configure the existing Bitwarden secret UUID using the corresponding workflow
+  variable name:
 
     BW_RECORDINGS_SHARED_SECRET
     BW_GEMINI_API_KEY
@@ -57,6 +104,10 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --config)
+      # Already loaded during the pre-parse above.
+      shift 2
+      ;;
     --repo)
       REPO="${2:?--repo requires a value}"
       shift 2
@@ -132,8 +183,8 @@ if [[ -z "${CODE_BUCKET}" ]]; then
   CODE_BUCKET="$(gh variable get CODE_BUCKET --env "${GH_ENVIRONMENT}" --repo "${REPO}" 2>/dev/null || true)"
 fi
 if [[ -z "${CODE_BUCKET}" ]]; then
-  echo 'CODE_BUCKET is not available as a GitHub environment variable yet.' >&2
-  echo 'Pass --code-bucket NAME or export CODE_BUCKET before running the bootstrap.' >&2
+  echo 'CODE_BUCKET is not configured locally or as a GitHub environment variable.' >&2
+  echo 'Set CODE_BUCKET in the local config file or pass --code-bucket NAME.' >&2
   exit 1
 fi
 
@@ -169,10 +220,10 @@ resolve_secret_id() {
 
   if [[ ${#matches[@]} -eq 0 ]]; then
     echo "Unable to find Bitwarden secret for ${override_name}." >&2
-    echo "Export ${override_name}=<secret-uuid> to provide the existing Bitwarden ID explicitly." >&2
+    echo "Set ${override_name}=<secret-uuid> in the local config file or environment." >&2
   else
     echo "Multiple Bitwarden secrets matched ${override_name}; refusing to guess." >&2
-    echo "Export ${override_name}=<secret-uuid> to select the intended secret explicitly." >&2
+    echo "Set ${override_name}=<secret-uuid> in the local config file or environment." >&2
   fi
   return 1
 }
@@ -191,14 +242,14 @@ echo "SSM prefix: ${SSM_PREFIX}"
 echo "GitHub OIDC role: ${ROLE_ARN}"
 echo "Code bucket: ${CODE_BUCKET}"
 echo "GitHub environment: ${REPO}:${GH_ENVIRONMENT}"
+if [[ -f "${CONFIG_FILE}" ]]; then
+  echo "Local config: ${CONFIG_FILE}"
+fi
 
 if [[ "${DRY_RUN}" == "true" ]]; then
   echo 'Dry run complete; no AWS or GitHub changes were made.'
   exit 0
 fi
-
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/.." && pwd)"
 
 echo 'Deploying scoped GitHub Actions SSM read policy...'
 AWS_REGION="${AWS_REGION}" \
