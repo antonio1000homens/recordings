@@ -164,7 +164,7 @@ async function objectText(item) {
 
 function callNameFromFilename(filename) {
   const value = String(filename || '').trim();
-  return value.replace(/\.[^.]+$/, '') || value || 'Recording';
+  return value.replace(/\\.[^.]+$/, '') || value || 'Recording';
 }
 
 async function getDynamoDb() {
