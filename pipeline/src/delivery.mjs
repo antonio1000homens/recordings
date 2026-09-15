@@ -216,6 +216,10 @@ function callbackUrl(callbackId) {
   return new URL(`recordings/callback/${callbackId}`, base.endsWith('/') ? base : `${base}/`).toString();
 }
 
+export function oneNoteSafeHtml(value) {
+  return String(value || '').replace(/<\/p>\s*(?=<p\b)/gi, '</p><br/>');
+}
+
 export function buildDownstreamPayload(delivery, callback) {
   return {
     recordingId: delivery.recordingId,
@@ -224,7 +228,7 @@ export function buildDownstreamPayload(delivery, callback) {
     audio: delivery.audio,
     html: delivery.html,
     callName: delivery.callName,
-    transcriptHtml: delivery.transcriptHtml,
+    transcriptHtml: oneNoteSafeHtml(delivery.transcriptHtml),
     callback,
   };
 }
