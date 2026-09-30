@@ -141,7 +141,7 @@ test('downstream payload contains artifact metadata and opaque callback without 
   assert.equal(payload.audio.url, 'https://signed/audio');
   assert.equal(payload.html.url, 'https://signed/html');
   assert.equal(payload.callName, 'Call');
-  assert.equal(payload.transcriptHtml, '<h2>Transcript</h2><p><b>Speaker 0:</b> Hello</p>');
+  assert.equal(payload.transcriptHtml, '<b>Transcript</b><br/><br/><b>Speaker 0:</b> Hello<br/><br/>');
   assert.match(payload.callback.url, /[a-f0-9]{64}$/);
   assert.doesNotMatch(JSON.stringify(payload), /secret-task-token|taskToken/);
 });
