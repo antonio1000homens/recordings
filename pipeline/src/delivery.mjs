@@ -217,7 +217,31 @@ function callbackUrl(callbackId) {
 }
 
 export function oneNoteSafeHtml(value) {
-  return String(value || '').replace(/<\/p>\s*(?=<p\b)/gi, '</p><br/>');
+  let html = String(value || '');
+
+  // OneNote via IFTTT may flatten block-level elements. Reduce those blocks to
+  // inline markup and explicit breaks while retaining supported inline tags
+  // such as <b>. This only applies to the webhook representation; the S3
+  // artifact remains untouched.
+  html = html.replace(/<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]\s*>/gi, '<b>$1</b><br/><br/>');
+  html = html.replace(/<ul\b[^>]*>([\s\S]*?)<\/ul\s*>/gi, (_list, contents) => {
+    const items = [...contents.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li\s*>/gi)];
+    return items.length
+      ? `${items.map((item) => `• ${item[1].trim()}`).join('<br/>')}<br/><br/>`
+      : '';
+  });
+  html = html.replace(/<ol\b[^>]*>([\s\S]*?)<\/ol\s*>/gi, (_list, contents) => {
+    const items = [...contents.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li\s*>/gi)];
+    return items.length
+      ? `${items.map((item, index) => `${index + 1}. ${item[1].trim()}`).join('<br/>')}<br/><br/>`
+      : '';
+  });
+  html = html.replace(/<p\b[^>]*>/gi, '').replace(/<\/p\s*>/gi, '<br/><br/>');
+  html = html.replace(/<li\b[^>]*>/gi, '• ').replace(/<\/li\s*>/gi, '<br/>');
+  html = html.replace(/<\/?(?:ul|ol)\b[^>]*>/gi, '');
+  html = html.replace(/(?:<br\s*\/?\s*>\s*){3,}/gi, '<br/><br/>');
+
+  return html;
 }
 
 export function buildDownstreamPayload(delivery, callback) {
