@@ -35,7 +35,7 @@ jobs:
       SSM_PREFIX: ${{ vars.SSM_PREFIX || '/recordings' }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.DEPLOY_SHA }}
 
@@ -56,7 +56,7 @@ jobs:
           test -n "${SSM_PREFIX}" || { echo 'SSM_PREFIX must not be empty.' >&2; exit 1; }
 
       - name: Configure recordings-only AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6.0.0
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           role-session-name: github-actions-recordings-ingress
@@ -85,10 +85,11 @@ jobs:
           echo "upload_url=${upload_url}" >> "${GITHUB_OUTPUT}"
           echo "callback_url=${callback_url}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
 
+      # TODO(#41): ingress lacks a committed lockfile; use npm ci once generated.
       - name: Install Worker dependencies
         working-directory: cloudflare/recordings-ingress
         run: npm install --no-audit --no-fund
