@@ -78,7 +78,7 @@ jobs:
       ALLOW_STACK_RECREATE: ${{ github.event_name == 'workflow_run' && 'false' || (inputs.confirm_stack_recreate && 'true' || 'false') }}
       SSM_PREFIX: ${{ vars.SSM_PREFIX || '/recordings' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.DEPLOY_SHA }}
 
@@ -114,7 +114,7 @@ jobs:
       - name: Check public source boundary
         run: bash scripts/check-public-source.sh
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           node-version: '22'
@@ -123,7 +123,7 @@ jobs:
             transform/package-lock.json
             pipeline/package-lock.json
 
-      - uses: aws-actions/setup-sam@v3
+      - uses: aws-actions/setup-sam@341eee193f458fa5aae5d52c94b0c5cf3a1c5a52 # v3
         with:
           use-installer: true
           token: ${{ github.token }}
@@ -144,7 +144,7 @@ jobs:
 
       - name: Download CI-tested transform SAM build
         if: ${{ github.event_name == 'workflow_run' }}
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: recordings-transform-sam-build
           path: transform/.aws-sam/build
@@ -168,7 +168,7 @@ jobs:
 
       - name: Download CI-tested pipeline SAM build
         if: ${{ github.event_name == 'workflow_run' }}
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: recordings-pipeline-sam-build
           path: pipeline/.aws-sam/build
@@ -197,7 +197,7 @@ jobs:
           test -n "${SSM_PREFIX}" || { echo 'SSM_PREFIX must not be empty.' >&2; exit 1; }
 
       - name: Configure recordings-only AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6.0.0
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           role-session-name: github-actions-recordings-production
