@@ -89,6 +89,7 @@ jobs:
         with:
           node-version: '22'
 
+      # TODO(#41): ingress lacks a committed lockfile; use npm ci once generated.
       - name: Install Worker dependencies
         working-directory: cloudflare/recordings-ingress
         run: npm install --no-audit --no-fund
